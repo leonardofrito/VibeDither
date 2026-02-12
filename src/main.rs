@@ -9,175 +9,67 @@ use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
     env_logger::init(); 
-
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_drag_and_drop(true),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1200.0, 800.0]).with_drag_and_drop(true),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
-
-    eframe::run_native(
-        "VibeDither",
-        options,
-        Box::new(|cc| {
-            setup_custom_style(&cc.egui_ctx);
-            Box::new(VibeDitherApp::new(cc))
-        }),
-    )
+    eframe::run_native("VibeDither", options, Box::new(|cc| { setup_custom_style(&cc.egui_ctx); Box::new(VibeDitherApp::new(cc)) }))
 }
 
 #[derive(PartialEq)]
-enum Tab {
-    Adjust,
-    Dither,
-}
+enum Tab { Adjust, Dither }
 
 #[derive(Clone, Copy)]
-struct GradientStop {
-    id: u64,
-    pos: f32,
-    color: egui::Color32,
-}
+struct GradientStop { id: u64, pos: f32, color: egui::Color32 }
 
 #[derive(PartialEq, Clone, Copy)]
-enum ExportFormat {
-    Png,
-    Jpg,
-    Webp,
-}
+enum ExportFormat { Png, Jpg, Webp }
 
 struct ExportSettings {
-    format: ExportFormat,
-    compression: f32, // 0.0 to 1.0
-    transparency: bool,
-    use_percentage: bool,
-    percentage: f32,
-    width_px: u32,
-    height_px: u32,
-    link_aspect: bool,
+    format: ExportFormat, compression: f32, transparency: bool,
+    use_percentage: bool, percentage: f32, width_px: u32, height_px: u32, link_aspect: bool,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self {
-            format: ExportFormat::Png,
-            compression: 0.8,
-            transparency: true,
-            use_percentage: true,
-            percentage: 1.0,
-            width_px: 1920,
-            height_px: 1080,
-            link_aspect: true,
-        }
+        Self { format: ExportFormat::Png, compression: 0.8, transparency: true, use_percentage: true, percentage: 1.0, width_px: 1920, height_px: 1080, link_aspect: true }
     }
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus {
-    Main,
-    Adjust,
-    Light,
-    Color,
-    Dither,
-    Editing(&'static str),
-    ModeSelection,
-    ColorRamp,
-}
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, ColorDitherMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit }
 
 struct VibeDitherApp {
-    pipeline: Pipeline,
-    current_image: Option<DynamicImage>,
-    // GPU-side resources
-    device: Option<Arc<wgpu::Device>>,
-    queue: Option<Arc<wgpu::Queue>>,
-    renderer: Option<Arc<egui::mutex::RwLock<egui_wgpu::Renderer>>>,
-    target_format: wgpu::TextureFormat,
-    input_texture: Option<wgpu::Texture>,
-    output_texture: Option<wgpu::Texture>,
-    egui_texture_id: Option<egui::TextureId>,
-    settings: ColorSettings,
-    curves_data: [u8; 1024], // 256 * 4 (RGBA)
-    gradient_data: [u8; 1024], // 256 * 4 (RGBA)
-    gradient_stops: Vec<GradientStop>,
-    selected_stop_id: Option<u64>,
-    next_stop_id: u64,
-    curve_points: Vec<egui::Pos2>,
-    dragging_point_idx: Option<usize>,
-    // UI state
-    active_tab: Tab,
-    // View state
-    zoom_factor: f32,
-    fit_to_screen: bool,
-    pan_offset: egui::Vec2,
-    // Keyboard Navigation
-    focus: KeyboardFocus,
-    last_edit_time: f64,
-    // Export state
-    show_export_window: bool,
-    export_settings: ExportSettings,
+    pipeline: Pipeline, current_image: Option<DynamicImage>,
+    device: Option<Arc<wgpu::Device>>, queue: Option<Arc<wgpu::Queue>>, renderer: Option<Arc<egui::mutex::RwLock<egui_wgpu::Renderer>>>,
+    target_format: wgpu::TextureFormat, input_texture: Option<wgpu::Texture>, output_texture: Option<wgpu::Texture>,
+    egui_texture_id: Option<egui::TextureId>, settings: ColorSettings,
+    curves_data: [u8; 1024], gradient_data: [u8; 1024], gradient_stops: Vec<GradientStop>,
+    selected_stop_id: Option<u64>, next_stop_id: u64, curve_points: Vec<egui::Pos2>,
+    dragging_point_idx: Option<usize>, active_tab: Tab, zoom_factor: f32, fit_to_screen: bool, pan_offset: egui::Vec2,
+    focus: KeyboardFocus, last_edit_time: f64, show_export_window: bool, export_settings: ExportSettings,
 }
 
 impl VibeDitherApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut pipeline = Pipeline::new();
-        let mut device = None;
-        let mut queue = None;
-        let mut renderer = None;
+        let mut device = None; let mut queue = None; let mut renderer = None;
         let mut target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        
         if let Some(wgpu_render_state) = &cc.wgpu_render_state {
-            device = Some(wgpu_render_state.device.clone());
-            queue = Some(wgpu_render_state.queue.clone());
-            renderer = Some(wgpu_render_state.renderer.clone());
-            target_format = wgpu_render_state.target_format;
-            pipeline.init(&wgpu_render_state.device, target_format);
+            device = Some(wgpu_render_state.device.clone()); queue = Some(wgpu_render_state.queue.clone()); renderer = Some(wgpu_render_state.renderer.clone());
+            target_format = wgpu_render_state.target_format; pipeline.init(&wgpu_render_state.device, target_format);
         }
-
         let mut curves_data = [0u8; 1024];
         let curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)];
         let lut = spline::interpolate_spline(&curve_points);
-        for i in 0..256 {
-            curves_data[i * 4] = lut[i];
-            curves_data[i * 4 + 1] = lut[i];
-            curves_data[i * 4 + 2] = lut[i];
-            curves_data[i * 4 + 3] = 255;
-        }
-
-        let gradient_stops = vec![
-            GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK },
-            GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE },
-        ];
-        let mut gradient_data = [0u8; 1024];
-        Self::generate_gradient_data(&gradient_stops, &mut gradient_data);
-
+        for i in 0..256 { curves_data[i * 4] = lut[i]; curves_data[i * 4 + 1] = lut[i]; curves_data[i * 4 + 2] = lut[i]; curves_data[i * 4 + 3] = 255; }
+        let gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
+        let mut gradient_data = [0u8; 1024]; Self::generate_gradient_data(&gradient_stops, &mut gradient_data);
         Self {
-            pipeline,
-            current_image: None,
-            device,
-            queue,
-            renderer,
-            target_format,
-            input_texture: None,
-            output_texture: None,
-            egui_texture_id: None,
-            settings: ColorSettings::default(),
-            curves_data,
-            gradient_data,
-            gradient_stops,
-            selected_stop_id: Some(0),
-            next_stop_id: 2,
-            curve_points,
-            dragging_point_idx: None,
-            active_tab: Tab::Adjust,
-            zoom_factor: 1.0,
-            fit_to_screen: false,
-            pan_offset: egui::Vec2::ZERO,
-            focus: KeyboardFocus::Main,
-            last_edit_time: 0.0,
-            show_export_window: false,
-            export_settings: ExportSettings::default(),
+            pipeline, current_image: None, device, queue, renderer, target_format, input_texture: None, output_texture: None, egui_texture_id: None,
+            settings: ColorSettings::default(), curves_data, gradient_data, gradient_stops, selected_stop_id: Some(0), next_stop_id: 2, curve_points, dragging_point_idx: None,
+            active_tab: Tab::Adjust, zoom_factor: 1.0, fit_to_screen: false, pan_offset: egui::Vec2::ZERO, focus: KeyboardFocus::Main, last_edit_time: 0.0, show_export_window: false, export_settings: ExportSettings::default(),
         }
     }
 
@@ -185,161 +77,78 @@ impl VibeDitherApp {
         if stops.is_empty() { return; }
         for i in 0..256 {
             let t = i as f32 / 255.0;
-            let mut lower = &stops[0];
-            let mut upper = &stops[stops.len() - 1];
-            for stop in stops {
-                if stop.pos <= t && stop.pos >= lower.pos { lower = stop; }
-                if stop.pos >= t && stop.pos <= upper.pos { upper = stop; }
-            }
-            let color = if (upper.pos - lower.pos).abs() < 0.0001 {
-                lower.color
-            } else {
-                let factor = (t - lower.pos) / (upper.pos - lower.pos);
+            let mut lower = &stops[0]; let mut upper = &stops[stops.len() - 1];
+            for stop in stops { if stop.pos <= t && stop.pos >= lower.pos { lower = stop; } if stop.pos >= t && stop.pos <= upper.pos { upper = stop; } }
+            let color = if (upper.pos - lower.pos).abs() < 0.0001 { lower.color } else {
+                let f = (t - lower.pos) / (upper.pos - lower.pos);
                 egui::Color32::from_rgba_unmultiplied(
-                    (lower.color.r() as f32 * (1.0 - factor) + upper.color.r() as f32 * factor) as u8,
-                    (lower.color.g() as f32 * (1.0 - factor) + upper.color.g() as f32 * factor) as u8,
-                    (lower.color.b() as f32 * (1.0 - factor) + upper.color.b() as f32 * factor) as u8,
-                    255,
+                    (lower.color.r() as f32 * (1.0 - f) + upper.color.r() as f32 * f) as u8,
+                    (lower.color.g() as f32 * (1.0 - f) + upper.color.g() as f32 * f) as u8,
+                    (lower.color.b() as f32 * (1.0 - f) + upper.color.b() as f32 * f) as u8, 255,
                 )
             };
-            data[i * 4] = color.r();
-            data[i * 4 + 1] = color.g();
-            data[i * 4 + 2] = color.b();
-            data[i * 4 + 3] = 255;
+            data[i * 4] = color.r(); data[i * 4 + 1] = color.g(); data[i * 4 + 2] = color.b(); data[i * 4 + 3] = 255;
         }
     }
 
     fn reset_adjustments(&mut self) {
-        self.settings = ColorSettings::default();
-        self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)];
+        self.settings = ColorSettings::default(); self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)];
         let lut = spline::interpolate_spline(&self.curve_points);
-        for i in 0..256 {
-            self.curves_data[i * 4] = lut[i];
-            self.curves_data[i * 4 + 1] = lut[i];
-            self.curves_data[i * 4 + 2] = lut[i];
-            self.curves_data[i * 4 + 3] = 255;
-        }
-        self.gradient_stops = vec![
-            GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK },
-            GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE },
-        ];
-        self.selected_stop_id = Some(0);
-        self.next_stop_id = 2;
-        Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
-        if let Some(queue) = &self.queue {
-            self.pipeline.update_curves(queue, &self.curves_data);
-            self.pipeline.update_gradient(queue, &self.gradient_data);
-        }
+        for i in 0..256 { self.curves_data[i * 4] = lut[i]; self.curves_data[i * 4 + 1] = lut[i]; self.curves_data[i * 4 + 2] = lut[i]; self.curves_data[i * 4 + 3] = 255; }
+        self.gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
+        self.selected_stop_id = Some(0); self.next_stop_id = 2; Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
+        if let Some(q) = &self.queue { self.pipeline.update_curves(q, &self.curves_data); self.pipeline.update_gradient(q, &self.gradient_data); }
     }
 
     fn load_image_to_gpu(&mut self, _ctx: &egui::Context, img: DynamicImage) {
-        self.reset_adjustments();
-        let Some(device) = &self.device else { return };
-        let Some(queue) = &self.queue else { return };
-        let Some(renderer) = &self.renderer else { return };
+        self.reset_adjustments(); let Some(device) = &self.device else { return }; let Some(queue) = &self.queue else { return }; let Some(renderer) = &self.renderer else { return };
         let input_tex = self.pipeline.create_texture_from_image(device, queue, &img);
-        let output_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("output_texture"),
-            size: input_tex.size(),
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let tex_id = renderer.write().register_native_texture(
-            device,
-            &output_tex.create_view(&wgpu::TextureViewDescriptor::default()),
-            wgpu::FilterMode::Nearest,
-        );
-        self.pipeline.update_curves(queue, &self.curves_data);
-        self.pipeline.update_gradient(queue, &self.gradient_data);
-        self.current_image = Some(img.clone());
-        self.export_settings.width_px = img.width();
-        self.export_settings.height_px = img.height();
-        self.input_texture = Some(input_tex);
-        self.output_texture = Some(output_tex);
-        self.egui_texture_id = Some(tex_id);
+        let output_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("output_texture"), size: input_tex.size(), mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: self.target_format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
+        let tex_id = renderer.write().register_native_texture(device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
+        self.pipeline.update_curves(queue, &self.curves_data); self.pipeline.update_gradient(queue, &self.gradient_data);
+        self.current_image = Some(img.clone()); self.export_settings.width_px = img.width(); self.export_settings.height_px = img.height();
+        self.input_texture = Some(input_tex); self.output_texture = Some(output_tex); self.egui_texture_id = Some(tex_id);
     }
 
     fn export_image(&mut self) {
         let (Some(device), Some(queue), Some(input_tex), Some(current_img)) = (&self.device, &self.queue, &self.input_texture, &self.current_image) else { return };
-        let width = current_img.width();
-        let height = current_img.height();
-        let output_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("export_output_texture"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: self.target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let width = current_img.width(); let height = current_img.height();
+        let output_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("export_output_texture"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: self.target_format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
         self.pipeline.render(device, queue, &input_tex.create_view(&wgpu::TextureViewDescriptor::default()), &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
-        let bytes_per_pixel = 4;
-        let unpadded_bytes_per_row = width * bytes_per_pixel;
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
-        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("export_staging_buffer"),
-            size: (padded_bytes_per_row * height) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("export_encoder") });
-        encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture { texture: &output_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, wgpu::ImageCopyBuffer { buffer: &staging_buffer, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bytes_per_row), rows_per_image: Some(height) } }, wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
+        let bytes_per_pixel = 4; let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT; let unpadded = width * bytes_per_pixel; let padded = unpadded + (align - unpadded % align) % align;
+        let staging = device.create_buffer(&wgpu::BufferDescriptor { label: Some("export_staging"), size: (padded * height) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("export_enc") });
+        encoder.copy_texture_to_buffer(wgpu::ImageCopyTexture { texture: &output_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }, wgpu::ImageCopyBuffer { buffer: &staging, layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(height) } }, wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
         queue.submit(Some(encoder.finish()));
-        let buffer_slice = staging_buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
-        device.poll(wgpu::Maintain::Wait);
+        let slice = staging.slice(..); let (tx, rx) = std::sync::mpsc::channel(); slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap()); device.poll(wgpu::Maintain::Wait);
         if let Ok(Ok(())) = rx.recv() {
-            let data = buffer_slice.get_mapped_range();
-            let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-            for row in 0..height {
-                let start = (row * padded_bytes_per_row) as usize;
-                let end = start + (width * 4) as usize;
-                for chunk in data[start..end].chunks_exact(4) {
-                    let r = (chunk[0] as f32 / 255.0).powf(1.0/2.4) * 255.0;
-                    let g = (chunk[1] as f32 / 255.0).powf(1.0/2.4) * 255.0;
-                    let b = (chunk[2] as f32 / 255.0).powf(1.0/2.4) * 255.0;
-                    pixels.push(r as u8); pixels.push(g as u8); pixels.push(b as u8); pixels.push(chunk[3]);
-                }
-            }
-            drop(data); staging_buffer.unmap();
-            if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, pixels) {
-                let mut dynamic_img = image::DynamicImage::ImageRgba8(img_buffer);
-                if dynamic_img.width() != self.export_settings.width_px || dynamic_img.height() != self.export_settings.height_px {
-                    dynamic_img = dynamic_img.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
-                }
-                if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg {
-                    dynamic_img = image::DynamicImage::ImageRgb8(dynamic_img.to_rgb8());
-                }
-                let (ext, filter) = match self.export_settings.format { ExportFormat::Png => ("png", "Portable Network Graphics"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WebP") };
-                let dither_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
-                let d_name = dither_names.get(self.settings.dither_type as usize).unwrap_or(&"Custom");
+            let data = slice.get_mapped_range(); let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+            for row in 0..height { let start = (row * padded) as usize; for chunk in data[start..start+(width*4) as usize].chunks_exact(4) { pixels.push(((chunk[0] as f32 / 255.0).powf(1.0/2.4) * 255.0) as u8); pixels.push(((chunk[1] as f32 / 255.0).powf(1.0/2.4) * 255.0) as u8); pixels.push(((chunk[2] as f32 / 255.0).powf(1.0/2.4) * 255.0) as u8); pixels.push(chunk[3]); } }
+            drop(data); staging.unmap();
+            if let Some(img_buf) = image::RgbaImage::from_raw(width, height, pixels) {
+                let mut dimg = image::DynamicImage::ImageRgba8(img_buf);
+                if dimg.width() != self.export_settings.width_px || dimg.height() != self.export_settings.height_px { dimg = dimg.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest); }
+                if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg { dimg = image::DynamicImage::ImageRgb8(dimg.to_rgb8()); }
+                let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WebP") };
+                let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
+                let d_name = d_names.get(self.settings.dither_type as usize).unwrap_or(&"Custom");
                 let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
-                let default_name = format!("VibeDither_{}{}.{}", d_name, color_suffix, ext);
-                if let Some(path) = rfd::FileDialog::new().add_filter(filter, &[ext]).set_file_name(&default_name).save_file() {
+                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&format!("VibeDither_{}{}.{}", d_name, color_suffix, ext)).save_file() {
                     match self.export_settings.format {
                         ExportFormat::Png => {
-                            let mut file = std::fs::File::create(&path).unwrap();
+                            let mut f = std::fs::File::create(&path).unwrap();
                             let level = if self.export_settings.compression > 0.8 { image::codecs::png::CompressionType::Best } else if self.export_settings.compression > 0.3 { image::codecs::png::CompressionType::Default } else { image::codecs::png::CompressionType::Fast };
-                            let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut file, level, image::codecs::png::FilterType::Adaptive);
-                            let (w, h) = dynamic_img.dimensions();
-                            let color_type = dynamic_img.color();
-                            encoder.write_image(dynamic_img.as_bytes(), w, h, color_type).ok();
+                            let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut f, level, image::codecs::png::FilterType::Adaptive);
+                            let (w, h) = dimg.dimensions(); let color_type = dimg.color();
+                            encoder.write_image(dimg.as_bytes(), w, h, color_type).ok();
                         },
                         ExportFormat::Jpg => {
-                            let mut file = std::fs::File::create(&path).unwrap();
+                            let mut f = std::fs::File::create(&path).unwrap();
                             let quality = (self.export_settings.compression * 100.0).clamp(1.0, 100.0) as u8;
-                            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, quality);
-                            encoder.encode_image(&dynamic_img).ok();
+                            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut f, quality);
+                            encoder.encode_image(&dimg).ok();
                         },
-                        ExportFormat::Webp => { dynamic_img.save(path).ok(); },
+                        ExportFormat::Webp => { dimg.save(path).ok(); },
                     }
                 }
             }
@@ -350,134 +159,111 @@ impl VibeDitherApp {
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut changed = false;
-
-        let (esc, space, key_a, key_d, key_q, key_e, key_c, key_h, _key_z, key_s, key_b, key_w, key_f, key_t, key_v, key_m, key_o, key_p, key_n, key_g, key_r, key_y, key_l, key_up, key_down, key_left, key_right, shift, ctrl, keys_0_9) = ctx.input(|i| (
-            i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L),
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up, k_down, k_left, k_right, shift, ctrl, keys_0_9) = ctx.input(|i| (
+            i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_down(egui::Key::ArrowUp) || i.key_down(egui::Key::W), i.key_down(egui::Key::ArrowDown) || i.key_down(egui::Key::S), i.key_down(egui::Key::ArrowLeft) || i.key_down(egui::Key::A), i.key_down(egui::Key::ArrowRight) || i.key_down(egui::Key::D),
             i.modifiers.shift, i.modifiers.ctrl,
-            [
-                i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2),
-                i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5),
-                i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8),
-                i.key_pressed(egui::Key::Num9)
-            ]
+            [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)]
         ));
 
-        // --- Zoom Shortcuts ---
-        for (idx, &pressed) in keys_0_9.iter().enumerate() {
-            if pressed {
-                self.zoom_factor = match idx {
-                    1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor,
-                };
-                self.fit_to_screen = false;
-            }
-        }
+        for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; } }
 
         if esc {
-            match self.focus {
-                KeyboardFocus::Editing(_) => self.focus = if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
-                KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::ModeSelection | KeyboardFocus::ColorRamp => self.focus = KeyboardFocus::Adjust,
-                _ => self.focus = KeyboardFocus::Main,
-            }
+            self.focus = match self.focus {
+                KeyboardFocus::Editing(_) => if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
+                KeyboardFocus::Light | KeyboardFocus::Color => KeyboardFocus::Adjust,
+                KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::ColorDitherMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu => KeyboardFocus::Dither,
+                KeyboardFocus::GradientPointEdit => KeyboardFocus::GradientMapMenu,
+                _ => KeyboardFocus::Main,
+            };
             self.show_export_window = false;
         }
 
         match self.focus {
-            KeyboardFocus::Main => {
-                if key_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
-                if key_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; }
-            }
-            KeyboardFocus::Adjust => {
-                if key_q { self.focus = KeyboardFocus::Light; }
-                if key_e { self.focus = KeyboardFocus::Color; }
-                if key_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; }
-            }
+            KeyboardFocus::Main => { if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
+            KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
             KeyboardFocus::Light => {
-                if key_e { self.focus = KeyboardFocus::Editing("exposure"); }
-                if key_c { self.focus = KeyboardFocus::Editing("contrast"); }
-                if key_h { self.focus = KeyboardFocus::Editing("highlights"); }
-                if key_s { self.focus = KeyboardFocus::Editing("shadows"); }
-                if key_b { self.focus = KeyboardFocus::Editing("blacks"); }
-                if key_w { self.focus = KeyboardFocus::Editing("whites"); }
-                if key_f { self.focus = KeyboardFocus::Editing("sharpness"); }
+                if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); }
+                if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); }
             }
             KeyboardFocus::Color => {
-                if key_t { self.focus = KeyboardFocus::Editing("temperature"); }
-                if key_e { self.focus = KeyboardFocus::Editing("tint"); }
-                if key_s { self.focus = KeyboardFocus::Editing("saturation"); }
-                if key_v { self.focus = KeyboardFocus::Editing("vibrance"); }
-                if key_f { self.focus = KeyboardFocus::Editing("sharpness"); }
+                if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); }
+                if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); }
             }
             KeyboardFocus::Dither => {
-                if key_m { self.focus = KeyboardFocus::ModeSelection; }
-                if key_o { self.focus = KeyboardFocus::Editing("scale"); }
-                if key_p { self.focus = KeyboardFocus::Editing("posterize"); }
-                if key_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); }
-                if key_n && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::Editing("bayer"); }
-                if key_c { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; }
-                if key_g { self.focus = KeyboardFocus::ColorRamp; }
-                if key_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
+                if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } if k_p { self.focus = KeyboardFocus::PosterizeMenu; }
+                if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
+                if k_c { self.focus = KeyboardFocus::ColorDitherMenu; } if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
             }
             KeyboardFocus::ModeSelection => {
-                let mut m = None;
-                if key_n { m = Some(0.0); } if key_t { m = Some(1.0); } if key_r { m = Some(2.0); } if key_o { m = Some(3.0); } if key_b { m = Some(4.0); } if key_d { m = Some(5.0); } if key_s { m = Some(6.0); } if key_a { m = Some(7.0); } if key_g { m = Some(8.0); } if key_l { m = Some(9.0); }
+                let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); }
                 if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
             }
-            KeyboardFocus::ColorRamp => {
-                if key_left || key_a {
-                    if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); } } }
-                }
-                if key_right || key_d {
-                    if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); } } }
-                }
-                if let Some(id) = self.selected_stop_id {
-                    let step = if shift { 1 } else { 10 };
-                    let mut stop_changed = false;
-                    if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
-                        if key_r { stop.color = color_add(stop.color, step, 0, 0); stop_changed = true; }
-                        if key_t { stop.color = color_add(stop.color, 0, step, 0); stop_changed = true; }
-                        if key_y { stop.color = color_add(stop.color, 0, 0, step); stop_changed = true; }
-                        if key_f { stop.color = color_add(stop.color, -step, 0, 0); stop_changed = true; }
-                        if key_g { stop.color = color_add(stop.color, 0, -step, 0); stop_changed = true; }
-                        if key_h { stop.color = color_add(stop.color, 0, 0, -step); stop_changed = true; }
+            KeyboardFocus::PosterizeMenu => { if k_e { self.settings.posterize_levels = if self.settings.posterize_levels > 0.0 { 0.0 } else { 4.0 }; changed = true; } if self.settings.posterize_levels > 0.0 { self.focus = KeyboardFocus::Editing("posterize"); } }
+            KeyboardFocus::ColorDitherMenu => { if k_e { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; self.focus = KeyboardFocus::Dither; } }
+            KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
+            KeyboardFocus::GradientMapMenu => {
+                if k_left || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); } } } }
+                if k_right || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); } } } }
+                if space { self.focus = KeyboardFocus::GradientPointEdit; }
+                if k_n { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
+                if k_b { if let Some(id) = self.selected_stop_id { if self.gradient_stops.len() > 2 { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; } } }
+            }
+            KeyboardFocus::GradientPointEdit => {
+                if space { self.focus = KeyboardFocus::GradientMapMenu; }
+                let now = ctx.input(|i| i.time);
+                if now - self.last_edit_time > 0.166 {
+                    let mut st_ch = false;
+                    if let Some(id) = self.selected_stop_id {
+                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                            let mut hsva = egui::ecolor::Hsva::from(stop.color);
+                            let h_step = if shift { 1.0/360.0 } else { 10.0/360.0 };
+                            let sv_step = if shift { 0.01 } else { 0.1 };
+                            if k_r { hsva.h = (hsva.h + h_step).fract(); st_ch = true; }
+                            if k_t { hsva.s = (hsva.s + sv_step).clamp(0.0, 1.0); st_ch = true; }
+                            if k_y { hsva.v = (hsva.v + sv_step).clamp(0.0, 1.0); st_ch = true; }
+                            if k_f { hsva.h = (hsva.h - h_step + 1.0).fract(); st_ch = true; }
+                            if k_g { hsva.s = (hsva.s - sv_step).clamp(0.0, 1.0); st_ch = true; }
+                            if k_h { hsva.v = (hsva.v - sv_step).clamp(0.0, 1.0); st_ch = true; }
+                            if k_left || k_a { stop.pos = (stop.pos - 0.01).clamp(0.0, 1.0); st_ch = true; }
+                            if k_right || k_d { stop.pos = (stop.pos + 0.01).clamp(0.0, 1.0); st_ch = true; }
+                            if st_ch { stop.color = egui::Color32::from(hsva); }
+                        }
                     }
-                    if stop_changed {
+                    if st_ch {
+                        self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap());
                         Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
                         if let Some(queue) = &self.queue { self.pipeline.update_gradient(queue, &self.gradient_data); }
-                        changed = true;
+                        changed = true; self.last_edit_time = now;
                     }
                 }
             }
             KeyboardFocus::Editing(id) => {
                 if space { self.focus = if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither }; }
-                let delta = if key_right || key_up { 1.0 } else if key_left || key_down { -1.0 } else { 0.0 };
-                
+                let delta = if k_right || k_up { 1.0 } else if k_left || k_down { -1.0 } else { 0.0 };
                 if delta != 0.0 {
                     let now = ctx.input(|i| i.time);
-                    if now - self.last_edit_time > 0.5 {
-                        let step = if shift { 0.1 } else { 0.05 };
-                        let mut actual_step = step;
-                        if id == "exposure" { actual_step = if shift { 0.15 } else { 0.05 }; }
-                        
+                    if now - self.last_edit_time > 0.166 {
+                        let mut act_step = if shift { 0.1 } else { 0.05 };
+                        if id == "exposure" { act_step = if shift { 0.5 } else { 0.15 }; }
                         match id {
-                            "exposure" => self.settings.exposure = (self.settings.exposure + delta * actual_step).clamp(-5.0, 5.0),
-                            "contrast" => self.settings.contrast = (self.settings.contrast + delta * actual_step).clamp(0.0, 2.0),
-                            "highlights" => self.settings.highlights = (self.settings.highlights + delta * actual_step).clamp(-1.0, 1.0),
-                            "shadows" => self.settings.shadows = (self.settings.shadows + delta * actual_step).clamp(-1.0, 1.0),
-                            "whites" => self.settings.whites = (self.settings.whites + delta * actual_step).clamp(-1.0, 1.0),
-                            "blacks" => self.settings.blacks = (self.settings.blacks + delta * actual_step).clamp(-1.0, 1.0),
-                            "sharpness" => self.settings.sharpness = (self.settings.sharpness + delta * actual_step).clamp(0.0, 2.0),
-                            "temperature" => self.settings.temperature = (self.settings.temperature + delta * actual_step).clamp(-1.0, 1.0),
-                            "tint" => self.settings.tint = (self.settings.tint + delta * actual_step).clamp(-1.0, 1.0),
-                            "saturation" => self.settings.saturation = (self.settings.saturation + delta * actual_step).clamp(0.0, 2.0),
-                            "vibrance" => self.settings.vibrance = (self.settings.vibrance + delta * actual_step).clamp(-1.0, 1.0),
-                            "scale" => self.settings.dither_scale = (self.settings.dither_scale + delta * actual_step * 10.0).clamp(1.0, 32.0),
-                            "threshold" => self.settings.dither_threshold = (self.settings.dither_threshold + delta * actual_step).clamp(0.0, 1.0),
-                            "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + delta * actual_step * 10.0).clamp(0.0, 64.0),
+                            "exposure" => self.settings.exposure = (self.settings.exposure + delta * act_step).clamp(-5.0, 5.0),
+                            "contrast" => self.settings.contrast = (self.settings.contrast + delta * act_step).clamp(0.0, 2.0),
+                            "highlights" => self.settings.highlights = (self.settings.highlights + delta * act_step).clamp(-1.0, 1.0),
+                            "shadows" => self.settings.shadows = (self.settings.shadows + delta * act_step).clamp(-1.0, 1.0),
+                            "whites" => self.settings.whites = (self.settings.whites + delta * act_step).clamp(-1.0, 1.0),
+                            "blacks" => self.settings.blacks = (self.settings.blacks + delta * act_step).clamp(-1.0, 1.0),
+                            "sharpness" => self.settings.sharpness = (self.settings.sharpness + delta * act_step).clamp(0.0, 2.0),
+                            "temperature" => self.settings.temperature = (self.settings.temperature + delta * act_step).clamp(-1.0, 1.0),
+                            "tint" => self.settings.tint = (self.settings.tint + delta * act_step).clamp(-1.0, 1.0),
+                            "saturation" => self.settings.saturation = (self.settings.saturation + delta * act_step).clamp(0.0, 2.0),
+                            "vibrance" => self.settings.vibrance = (self.settings.vibrance + delta * act_step).clamp(-1.0, 1.0),
+                            "scale" => self.settings.dither_scale = (self.settings.dither_scale + delta * act_step * 10.0).clamp(1.0, 32.0),
+                            "threshold" => self.settings.dither_threshold = (self.settings.dither_threshold + delta * act_step).clamp(0.0, 1.0),
+                            "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + delta * act_step * 10.0).clamp(0.0, 64.0),
                             _ => {}
                         }
-                        self.last_edit_time = now;
-                        changed = true;
+                        self.last_edit_time = now; changed = true;
                     }
                 }
             }
@@ -486,7 +272,7 @@ impl eframe::App for VibeDitherApp {
         egui::TopBottomPanel::top("top_shortcuts").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("[{}]", match self.focus {
-                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::ColorRamp => "COLOR RAMP", KeyboardFocus::Editing(_) => "EDITING",
+                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::ColorDitherMenu => "COLOR DITHER", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING",
                 }));
                 ui.separator();
                 let shortcuts = match self.focus {
@@ -494,10 +280,14 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Adjust => "Q:Light  E:Color  Esc:Back",
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
-                    KeyboardFocus::Dither => "M:Mode O:Scale P:Post T:Thresh N:Bayer C:Color G:Ramp Esc:Back",
-                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Ctrl:Slow  Space:OK",
-                    KeyboardFocus::ModeSelection => "0-9/N,T,R,O,B,D,S,A,G,L:Select Mode",
-                    KeyboardFocus::ColorRamp => "A/D:Navigate  R,T,Y/F,G,H:RGB +/-  Shift:Fine  Space:Done",
+                    KeyboardFocus::Dither => "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back",
+                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
+                    KeyboardFocus::ModeSelection => "A:None S:Thresh D:Rand F:Bayer G:Blue H:Diff J:Stucki K:Atkin L:Grad C:Latt",
+                    KeyboardFocus::PosterizeMenu => "E:Toggle  Esc:Back",
+                    KeyboardFocus::ColorDitherMenu => "E:Toggle  Esc:Back",
+                    KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
+                    KeyboardFocus::GradientMapMenu => "A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
+                    KeyboardFocus::GradientPointEdit => "R,T,Y/F,G,H:HSB +/-  A/D:Move  Shift:Fine  Space:Done",
                 };
                 ui.label(shortcuts);
             });
@@ -515,21 +305,14 @@ impl eframe::App for VibeDitherApp {
             });
         }
 
-        ctx.input(|i| {
-            if !i.raw.dropped_files.is_empty() {
-                if let Some(path) = i.raw.dropped_files[0].path.as_ref() {
-                    if let Ok(img) = image_io::load_from_path(path) { self.load_image_to_gpu(ctx, img); changed = true; }
-                }
-            }
-        });
+        ctx.input(|i| { if !i.raw.dropped_files.is_empty() { if let Some(path) = i.raw.dropped_files[0].path.as_ref() { if let Ok(img) = image_io::load_from_path(path) { self.load_image_to_gpu(ctx, img); } } } });
 
         egui::SidePanel::left("control_panel").resizable(true).default_width(300.0).show(ctx, |ui| {
-            ui.heading("VibeDither v0.3");
-            ui.separator();
+            ui.heading("VibeDither v0.3"); ui.separator();
             ui.vertical(|ui| {
                 ui.label("IMAGE CONTROLS");
-                if ui.button("Load Image").clicked() { if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp"]).pick_file() { if let Ok(img) = image_io::load_from_path(&path) { self.load_image_to_gpu(ctx, img); changed = true; } } }
-                if ui.button("Paste from Clipboard").clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); changed = true; } }
+                if ui.button("Load Image").clicked() { if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp"]).pick_file() { if let Ok(img) = image_io::load_from_path(&path) { self.load_image_to_gpu(ctx, img); } } }
+                if ui.button("Paste from Clipboard").clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); } }
                 if ui.button("Export Image").clicked() { self.show_export_window = true; }
                 ui.separator();
                 ui.horizontal(|ui| { ui.selectable_value(&mut self.active_tab, Tab::Adjust, "ADJUST"); ui.selectable_value(&mut self.active_tab, Tab::Dither, "DITHER"); });
@@ -609,60 +392,64 @@ impl eframe::App for VibeDitherApp {
                     },
                     Tab::Dither => {
                         ui.label("DITHERING CONTROLS");
-                        let dither_type = self.settings.dither_type as usize;
-                        let dither_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "Lattice-Boltzmann"];
-                        egui::ComboBox::from_label("Algorithm").selected_text(dither_names[dither_type.min(dither_names.len() - 1)]).show_ui(ui, |ui| {
-                            for (i, name) in dither_names.iter().enumerate() { if ui.selectable_label(dither_type == i, *name).clicked() { self.settings.dither_type = i as f32; self.settings.dither_enabled = if i > 0 { 1.0 } else { 0.0 }; self.settings.dither_color = 0.0; side_changed = true; } }
+                        let d_type = self.settings.dither_type as usize;
+                        let d_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "Lattice-Boltzmann"];
+                        egui::ComboBox::from_label("Algorithm").selected_text(d_names[d_type.min(d_names.len() - 1)]).show_ui(ui, |ui| {
+                            for (i, name) in d_names.iter().enumerate() { if ui.selectable_label(d_type == i, *name).clicked() { self.settings.dither_type = i as f32; self.settings.dither_enabled = if i > 0 { 1.0 } else { 0.0 }; self.settings.dither_color = 0.0; side_changed = true; } }
                         });
-                        ui.add_enabled_ui(dither_type > 0, |ui| {
+                        ui.add_enabled_ui(d_type > 0, |ui| {
                             let mut scale_int = self.settings.dither_scale as i32; if ui.add(egui::Slider::new(&mut scale_int, 1..=32).text("Pixel Scale")).changed() { self.settings.dither_scale = scale_int as f32; side_changed = true; }
-                            if dither_type == 1 { side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold")).changed(); }
+                            if d_type == 1 { side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold")).changed(); }
                             ui.group(|ui| {
                                 ui.label("Posterize");
-                                let mut use_posterize = self.settings.posterize_levels > 0.0;
-                                if ui.checkbox(&mut use_posterize, "Enabled").changed() { self.settings.posterize_levels = if use_posterize { 4.0 } else { 0.0 }; side_changed = true; }
-                                ui.add_enabled_ui(use_posterize, |ui| { side_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 2.0..=64.0).text("Levels")).changed(); });
+                                let mut use_p = self.settings.posterize_levels > 0.0;
+                                if ui.checkbox(&mut use_p, "Enabled").changed() { self.settings.posterize_levels = if use_p { 4.0 } else { 0.0 }; side_changed = true; }
+                                ui.add_enabled_ui(use_p, |ui| { side_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 2.0..=64.0).text("Levels")).changed(); });
                             });
-                            if dither_type == 3 { ui.horizontal(|ui| { ui.label("Matrix Size:"); let sizes = [2, 3, 4, 8]; for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } } }); }
-                            if dither_type >= 1 { let mut color_dither = self.settings.dither_color > 0.5; if ui.checkbox(&mut color_dither, "Color Dithering").changed() { self.settings.dither_color = if color_dither { 1.0 } else { 0.0 }; side_changed = true; } }
+                            if d_type == 3 { ui.horizontal(|ui| { ui.label("Matrix Size:"); let sizes = [2, 3, 4, 8]; for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } } }); }
+                            if d_type >= 1 { let mut color_d = self.settings.dither_color > 0.5; if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; } }
                         });
                         ui.separator(); ui.label("GRADIENT REMAP");
-                        let mut grad_enabled = self.settings.grad_enabled > 0.5;
-                        if ui.checkbox(&mut grad_enabled, "Enable Gradient Remap").changed() { self.settings.grad_enabled = if grad_enabled { 1.0 } else { 0.0 }; side_changed = true; }
-                        ui.add_enabled_ui(grad_enabled, |ui| {
-                            let mut stops_changed = false;
+                        let mut grad_e = self.settings.grad_enabled > 0.5;
+                        if ui.checkbox(&mut grad_e, "Enable Gradient Remap").changed() { self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; side_changed = true; }
+                        ui.add_enabled_ui(grad_e, |ui| {
+                            let mut stops_ch = false;
                             ui.vertical(|ui| {
-                                let ramp_height = 20.0; let (ramp_rect, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), ramp_height), egui::Sense::hover()); let _rect = ui.allocate_space(egui::vec2(ui.available_width(), 15.0));
+                                let ramp_h = 20.0; let (ramp_r, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), ramp_h), egui::Sense::hover()); let _rect = ui.allocate_space(egui::vec2(ui.available_width(), 15.0));
                                 for i in 0..255 {
-                                    let t0 = i as f32 / 255.0; let t1 = (i + 1) as f32 / 255.0; let x0 = ramp_rect.left() + t0 * ramp_rect.width(); let x1 = ramp_rect.left() + t1 * ramp_rect.width();
+                                    let t0 = i as f32 / 255.0; let t1 = (i + 1) as f32 / 255.0; let x0 = ramp_r.left() + t0 * ramp_r.width(); let x1 = ramp_r.left() + t1 * ramp_r.width();
                                     let c0 = egui::Color32::from_rgba_unmultiplied(self.gradient_data[i * 4], self.gradient_data[i * 4 + 1], self.gradient_data[i * 4 + 2], 255);
-                                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, ramp_rect.top()), egui::pos2(x1, ramp_rect.bottom())), 0.0, c0);
+                                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, ramp_r.top()), egui::pos2(x1, ramp_r.bottom())), 0.0, c0);
                                 }
-                                ui.painter().rect_stroke(ramp_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)));
-                                let mut active_id = self.selected_stop_id; let mut dragged_id = None; let mut new_pos_val = 0.0;
+                                ui.painter().rect_stroke(ramp_r, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)));
+                                let mut active_id = self.selected_stop_id; let mut dragged_id = None; let mut new_p_val = 0.0;
                                 for stop in self.gradient_stops.iter() {
-                                    let x = ramp_rect.left() + stop.pos * ramp_rect.width(); let y = ramp_rect.bottom() + 2.0; let is_selected = Some(stop.id) == active_id; let color = if is_selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(150, 150, 150) };
+                                    let x = ramp_r.left() + stop.pos * ramp_r.width(); let y = ramp_r.bottom() + 2.0; let is_sel = Some(stop.id) == active_id; let color = if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(150, 150, 150) };
                                     ui.painter().add(egui::Shape::convex_polygon(vec![egui::pos2(x, y), egui::pos2(x - 5.0, y + 8.0), egui::pos2(x + 5.0, y + 8.0)], color, egui::Stroke::NONE));
-                                    let handle_res = ui.interact(egui::Rect::from_center_size(egui::pos2(x, y + 4.0), egui::vec2(10.0, 10.0)), egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
-                                    if handle_res.clicked() { active_id = Some(stop.id); }
-                                    if handle_res.dragged() { active_id = Some(stop.id); new_pos_val = (stop.pos + handle_res.drag_delta().x / ramp_rect.width()).clamp(0.0, 1.0); dragged_id = Some(stop.id); }
+                                    let h_res = ui.interact(egui::Rect::from_center_size(egui::pos2(x, y + 4.0), egui::vec2(10.0, 10.0)), egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
+                                    if h_res.clicked() { active_id = Some(stop.id); }
+                                    if h_res.dragged() { active_id = Some(stop.id); new_p_val = (stop.pos + h_res.drag_delta().x / ramp_r.width()).clamp(0.0, 1.0); dragged_id = Some(stop.id); }
                                 }
-                                if let Some(id) = dragged_id { if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { stop.pos = new_pos_val; stops_changed = true; } }
+                                if let Some(id) = dragged_id { if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { stop.pos = new_p_val; stops_ch = true; } }
                                 self.selected_stop_id = active_id;
                                 ui.horizontal(|ui| {
-                                    if ui.button("+").clicked() { let new_id = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: new_id, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(new_id); stops_changed = true; }
+                                    if ui.button("+").clicked() { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); stops_ch = true; }
                                     if let Some(id) = self.selected_stop_id {
-                                        if self.gradient_stops.len() > 2 { if ui.button("-").clicked() { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); stops_changed = true; } }
+                                        if self.gradient_stops.len() > 2 { if ui.button("-").clicked() { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); stops_ch = true; } }
                                         ui.separator();
-                                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { if ui.color_edit_button_srgba(&mut stop.color).changed() { stops_changed = true; } ui.add(egui::DragValue::new(&mut stop.pos).speed(0.01).clamp_range(0.0..=1.0)); }
+                                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { if ui.color_edit_button_srgba(&mut stop.color).changed() { stops_ch = true; } ui.add(egui::DragValue::new(&mut stop.pos).speed(0.01).clamp_range(0.0..=1.0)); }
                                     }
                                 });
                             });
-                            if stops_changed { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(queue) = &self.queue { self.pipeline.update_gradient(queue, &self.gradient_data); } side_changed = true; }
+                            if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
                         });
+                    },
+                }
+                if side_changed || changed {
+                    if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
+                        self.pipeline.render(device, queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
                     }
                 }
-                if side_changed { changed = true; }
             });
         });
 
@@ -681,15 +468,15 @@ impl eframe::App for VibeDitherApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(tex_id) = self.egui_texture_id {
                 let img_size = self.current_image.as_ref().map(|img| egui::vec2(img.width() as f32, img.height() as f32)).unwrap_or(egui::Vec2::ZERO);
-                let (rect, response) = ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
-                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
-                if scroll_delta != 0.0 {
-                    let old_zoom = self.zoom_factor; self.zoom_factor = (self.zoom_factor * (1.0 + scroll_delta * 0.002)).clamp(0.1, 32.0); self.fit_to_screen = false;
-                    if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) { let relative_pos = mouse_pos - rect.center() - self.pan_offset; self.pan_offset -= relative_pos * (self.zoom_factor / old_zoom - 1.0); }
+                let (rect, resp) = ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
+                let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll != 0.0 {
+                    let old_z = self.zoom_factor; self.zoom_factor = (self.zoom_factor * (1.0 + scroll * 0.002)).clamp(0.1, 32.0); self.fit_to_screen = false;
+                    if let Some(m_pos) = ui.input(|i| i.pointer.hover_pos()) { let rel = m_pos - rect.center() - self.pan_offset; self.pan_offset -= rel * (self.zoom_factor / old_z - 1.0); }
                 }
-                if response.dragged_by(egui::PointerButton::Primary) { self.pan_offset += response.drag_delta(); }
-                let display_size = if self.fit_to_screen { let ratio = (rect.width() / img_size.x).min(rect.height() / img_size.y); img_size * ratio } else { img_size * self.zoom_factor };
-                ui.set_clip_rect(rect); ui.painter().image(tex_id, egui::Rect::from_center_size(rect.center() + self.pan_offset, display_size), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                if resp.dragged_by(egui::PointerButton::Primary) { self.pan_offset += resp.drag_delta(); }
+                let d_size = if self.fit_to_screen { let r = (rect.width() / img_size.x).min(rect.height() / img_size.y); img_size * r } else { img_size * self.zoom_factor };
+                ui.set_clip_rect(rect); ui.painter().image(tex_id, egui::Rect::from_center_size(rect.center() + self.pan_offset, d_size), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
             } else { ui.centered_and_justified(|ui| { ui.label("Drag and drop an image or use 'Load Image'"); }); }
         });
 
@@ -718,8 +505,6 @@ impl eframe::App for VibeDitherApp {
             });
             if close { self.show_export_window = false; }
         }
-
-        if changed && self.egui_texture_id.is_some() { if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) { self.pipeline.render(device, queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings); } }
     }
 }
 
