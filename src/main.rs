@@ -74,19 +74,12 @@ impl Default for ExportSettings {
     }
 }
 
-#[derive(PartialEq, Clone)]
-enum MenuLevel {
-    Main,
-    AdjustList,
-    DitherList,
-    SingleAdjustment(&'static str),
-    SingleDither(&'static str),
-}
-
-#[derive(Clone)]
-struct QuickMenuState {
-    pos: egui::Pos2,
-    level: MenuLevel,
+#[derive(PartialEq, Clone, Copy)]
+enum KeyboardFocus {
+    None,
+    ModeSelection,
+    ColorRamp,
+    EditingValue(&'static str),
 }
 
 struct VibeDitherApp {
@@ -114,8 +107,8 @@ struct VibeDitherApp {
     zoom_factor: f32,
     fit_to_screen: bool,
     pan_offset: egui::Vec2,
-    // Quick Menu
-    quick_menu: Option<QuickMenuState>,
+    // Keyboard Navigation
+    focus: KeyboardFocus,
     // Export state
     show_export_window: bool,
     export_settings: ExportSettings,
@@ -176,7 +169,7 @@ impl VibeDitherApp {
             zoom_factor: 1.0,
             fit_to_screen: false,
             pan_offset: egui::Vec2::ZERO,
-            quick_menu: None,
+            focus: KeyboardFocus::None,
             show_export_window: false,
             export_settings: ExportSettings::default(),
         }
@@ -441,6 +434,151 @@ impl VibeDitherApp {
 
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let mut changed = false;
+
+        // --- Keyboard Shortcuts ---
+        let (esc, space, key_a, key_d, key_e, key_c, key_h, key_z, key_q, key_r, key_t, key_m, key_o, key_p, key_n, key_g, key_b, key_s, key_l, key_y, key_f, key_up, key_down, shift, ctrl) = ctx.input(|i| (
+            i.key_pressed(egui::Key::Escape),
+            i.key_pressed(egui::Key::Space),
+            i.key_pressed(egui::Key::A),
+            i.key_pressed(egui::Key::D),
+            i.key_pressed(egui::Key::E),
+            i.key_pressed(egui::Key::C),
+            i.key_pressed(egui::Key::H),
+            i.key_pressed(egui::Key::Z),
+            i.key_pressed(egui::Key::Q),
+            i.key_pressed(egui::Key::R),
+            i.key_pressed(egui::Key::T),
+            i.key_pressed(egui::Key::M),
+            i.key_pressed(egui::Key::O),
+            i.key_pressed(egui::Key::P),
+            i.key_pressed(egui::Key::N),
+            i.key_pressed(egui::Key::G),
+            i.key_pressed(egui::Key::B),
+            i.key_pressed(egui::Key::S),
+            i.key_pressed(egui::Key::L),
+            i.key_pressed(egui::Key::Y),
+            i.key_pressed(egui::Key::F),
+            i.key_down(egui::Key::ArrowUp) || i.key_down(egui::Key::W),
+            i.key_down(egui::Key::ArrowDown) || i.key_down(egui::Key::S),
+            i.modifiers.shift,
+            i.modifiers.ctrl,
+        ));
+
+        if esc {
+            self.focus = KeyboardFocus::None;
+            self.show_export_window = false;
+        }
+
+        if space {
+            if let KeyboardFocus::EditingValue(_) = self.focus {
+                self.focus = KeyboardFocus::None;
+            }
+        }
+
+        match self.focus {
+            KeyboardFocus::None => {
+                if key_a { self.active_tab = Tab::Adjust; }
+                if key_d { self.active_tab = Tab::Dither; }
+
+                if self.active_tab == Tab::Adjust {
+                    if key_e && !shift { self.focus = KeyboardFocus::EditingValue("exposure"); }
+                    if key_c { self.focus = KeyboardFocus::EditingValue("contrast"); }
+                    if key_h { self.focus = KeyboardFocus::EditingValue("highlights"); }
+                    if key_z { self.focus = KeyboardFocus::EditingValue("shadows"); }
+                    if key_q { self.focus = KeyboardFocus::EditingValue("blacks"); }
+                    if key_e && shift { self.focus = KeyboardFocus::EditingValue("whites"); }
+                    if key_r { self.focus = KeyboardFocus::EditingValue("sharpness"); }
+                } else if self.active_tab == Tab::Dither {
+                    if key_m { self.focus = KeyboardFocus::ModeSelection; }
+                    if key_o { self.focus = KeyboardFocus::EditingValue("scale"); }
+                    if key_p { self.focus = KeyboardFocus::EditingValue("posterize"); }
+                    if key_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::EditingValue("threshold"); }
+                    if key_n && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::EditingValue("bayer"); }
+                    if key_c { 
+                        self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 };
+                        changed = true;
+                    }
+                    if key_g { self.focus = KeyboardFocus::ColorRamp; }
+                }
+            }
+            KeyboardFocus::ModeSelection => {
+                let mut new_mode = None;
+                if key_n { new_mode = Some(0.0); }
+                if key_t { new_mode = Some(1.0); }
+                if key_r { new_mode = Some(2.0); }
+                if key_o { new_mode = Some(3.0); }
+                if key_b { new_mode = Some(4.0); }
+                if key_d { new_mode = Some(5.0); }
+                if key_s { new_mode = Some(6.0); }
+                if key_a { new_mode = Some(7.0); }
+                if key_g { new_mode = Some(8.0); }
+                if key_l { new_mode = Some(9.0); }
+                
+                if let Some(m) = new_mode {
+                    self.settings.dither_type = m;
+                    self.settings.dither_enabled = if m > 0.0 { 1.0 } else { 0.0 };
+                    self.focus = KeyboardFocus::None;
+                    changed = true;
+                }
+            }
+            KeyboardFocus::ColorRamp => {
+                if key_a {
+                    if let Some(id) = self.selected_stop_id {
+                        if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
+                            if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); }
+                        }
+                    }
+                }
+                if key_d {
+                    if let Some(id) = self.selected_stop_id {
+                        if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
+                            if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); }
+                        }
+                    }
+                }
+                
+                if let Some(id) = self.selected_stop_id {
+                    let step = if shift { 1 } else { 10 };
+                    let mut stop_changed = false;
+                    if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                        if key_r { stop.color = color_add(stop.color, step, 0, 0); stop_changed = true; }
+                        if key_t { stop.color = color_add(stop.color, 0, step, 0); stop_changed = true; }
+                        if key_y { stop.color = color_add(stop.color, 0, 0, step); stop_changed = true; }
+                        if key_f { stop.color = color_add(stop.color, -step, 0, 0); stop_changed = true; }
+                        if key_g { stop.color = color_add(stop.color, 0, -step, 0); stop_changed = true; }
+                        if key_h { stop.color = color_add(stop.color, 0, 0, -step); stop_changed = true; }
+                    }
+                    if stop_changed {
+                        Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
+                        if let Some(queue) = &self.queue {
+                            self.pipeline.update_gradient(queue, &self.gradient_data);
+                        }
+                        changed = true;
+                    }
+                }
+            }
+            KeyboardFocus::EditingValue(id) => {
+                let step = if key_up { 0.01 } else if key_down { -0.01 } else { 0.0 };
+                if step != 0.0 {
+                    match id {
+                        "exposure" => self.settings.exposure = (self.settings.exposure + step).clamp(-5.0, 5.0),
+                        "contrast" => self.settings.contrast = (self.settings.contrast + step).clamp(0.0, 2.0),
+                        "highlights" => self.settings.highlights = (self.settings.highlights + step).clamp(-1.0, 1.0),
+                        "shadows" => self.settings.shadows = (self.settings.shadows + step).clamp(-1.0, 1.0),
+                        "whites" => self.settings.whites = (self.settings.whites + step).clamp(-1.0, 1.0),
+                        "blacks" => self.settings.blacks = (self.settings.blacks + step).clamp(-1.0, 1.0),
+                        "sharpness" => self.settings.sharpness = (self.settings.sharpness + step).clamp(0.0, 2.0),
+                        "scale" => self.settings.dither_scale = (self.settings.dither_scale + step * 10.0).clamp(1.0, 32.0),
+                        "threshold" => self.settings.dither_threshold = (self.settings.dither_threshold + step).clamp(0.0, 1.0),
+                        "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + step * 10.0).clamp(0.0, 64.0),
+                        _ => {}
+                    }
+                    changed = true;
+                }
+            }
+        }
+
         // Handle drag and drop
         ctx.input(|i| {
             if !i.raw.dropped_files.is_empty() {
@@ -451,6 +589,27 @@ impl eframe::App for VibeDitherApp {
                 }
             }
         });
+
+        // --- Focus Overlay ---
+        if self.focus != KeyboardFocus::None {
+            egui::Area::new(egui::Id::new("focus_indicator"))
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 10.0))
+                .show(ctx, |ui| {
+                    let frame = egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(0, 0, 0))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)))
+                        .inner_margin(4.0);
+                    frame.show(ui, |ui| {
+                        let text = match self.focus {
+                            KeyboardFocus::ModeSelection => "MODE SELECTION".to_string(),
+                            KeyboardFocus::ColorRamp => "COLOR RAMP EDIT".to_string(),
+                            KeyboardFocus::EditingValue(id) => format!("EDITING: {}", id.to_uppercase()),
+                            _ => "".to_string(),
+                        };
+                        ui.label(text);
+                    });
+                });
+        }
 
         egui::SidePanel::left("control_panel")
             .resizable(true)
@@ -911,16 +1070,6 @@ impl eframe::App for VibeDitherApp {
                     self.pan_offset += response.drag_delta();
                 }
 
-                // --- Handle Quick Menu Trigger ---
-                if response.clicked() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        self.quick_menu = Some(QuickMenuState {
-                            pos,
-                            level: MenuLevel::Main,
-                        });
-                    }
-                }
-
                 let display_size = if self.fit_to_screen {
                     let ratio = (rect.width() / img_size.x).min(rect.height() / img_size.y);
                     img_size * ratio
@@ -942,166 +1091,122 @@ impl eframe::App for VibeDitherApp {
         });
 
         // --- Export Window ---
-        // ... (keep existing export window code)
-
-        // --- Quick Access Menu ---
-        if let Some(menu) = self.quick_menu.clone() {
-            let mut close_menu = false;
-            let mut menu_changed = false;
-
-            egui::Area::new(egui::Id::new("quick_menu"))
-                .fixed_pos(menu.pos)
+        if self.show_export_window {
+            let mut close = false;
+            egui::Window::new("Export Settings")
+                .collapsible(false)
+                .resizable(false)
                 .show(ctx, |ui| {
-                    let frame = egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(0, 0, 0))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)))
-                        .inner_margin(4.0);
-
-                    frame.show(ui, |ui| {
-                        ui.set_max_width(200.0);
-                        match menu.level {
-                            MenuLevel::Main => {
-                                if ui.button("> ADJUST").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::AdjustList;
-                                }
-                                if ui.button("> DITHER").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::DitherList;
-                                }
-                                if ui.button("> CLOSE").clicked() {
-                                    close_menu = true;
-                                }
-                            }
-                            MenuLevel::AdjustList => {
-                                let adjs = [
-                                    ("Exposure", "exposure"), ("Contrast", "contrast"), 
-                                    ("Highlights", "highlights"), ("Shadows", "shadows"),
-                                    ("Whites", "whites"), ("Blacks", "blacks"),
-                                    ("Temp", "temperature"), ("Tint", "tint"),
-                                    ("Vibrance", "vibrance"), ("Saturation", "saturation"),
-                                    ("Sharpness", "sharpness")
-                                ];
-                                for (label, id) in adjs {
-                                    if ui.button(label).clicked() {
-                                        self.quick_menu.as_mut().unwrap().level = MenuLevel::SingleAdjustment(id);
-                                    }
-                                }
-                                if ui.button("< BACK").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::Main;
-                                }
-                            }
-                            MenuLevel::DitherList => {
-                                let diths = [
-                                    ("Pixel Scale", "scale"), ("Threshold", "threshold"),
-                                    ("Posterize", "posterize"), ("Matrix Size", "bayer"),
-                                    ("Color Mode", "color")
-                                ];
-                                for (label, id) in diths {
-                                    if ui.button(label).clicked() {
-                                        self.quick_menu.as_mut().unwrap().level = MenuLevel::SingleDither(id);
-                                    }
-                                }
-                                if ui.button("< BACK").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::Main;
-                                }
-                            }
-                            MenuLevel::SingleAdjustment(id) => {
-                                match id {
-                                    "exposure" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.exposure, -5.0..=5.0).text("Exp")).changed(),
-                                    "contrast" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.contrast, 0.0..=2.0).text("Con")).changed(),
-                                    "highlights" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.highlights, -1.0..=1.0).text("High")).changed(),
-                                    "shadows" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.shadows, -1.0..=1.0).text("Shad")).changed(),
-                                    "whites" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.whites, -1.0..=1.0).text("White")).changed(),
-                                    "blacks" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.blacks, -1.0..=1.0).text("Black")).changed(),
-                                    "temperature" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.temperature, -1.0..=1.0).text("Temp")).changed(),
-                                    "tint" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.tint, -1.0..=1.0).text("Tint")).changed(),
-                                    "vibrance" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.vibrance, -1.0..=1.0).text("Vib")).changed(),
-                                    "saturation" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.saturation, 0.0..=2.0).text("Sat")).changed(),
-                                    "sharpness" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.sharpness, 0.0..=2.0).text("Sharp")).changed(),
-                                    _ => {}
-                                }
-                                if ui.button("OK").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::AdjustList;
-                                }
-                            }
-                            MenuLevel::SingleDither(id) => {
-                                match id {
-                                    "scale" => {
-                                        let mut s = self.settings.dither_scale as i32;
-                                        if ui.add(egui::Slider::new(&mut s, 1..=32).text("Scale")).changed() {
-                                            self.settings.dither_scale = s as f32;
-                                            menu_changed = true;
-                                        }
-                                    }
-                                    "threshold" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Thresh")).changed(),
-                                    "posterize" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 0.0..=64.0).text("Post")).changed(),
-                                    "bayer" => {
-                                        ui.horizontal(|ui| {
-                                            let sizes = [2, 3, 4, 8];
-                                            for s in sizes {
-                                                if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}", s)).clicked() {
-                                                    self.settings.bayer_size = s as f32;
-                                                    menu_changed = true;
-                                                }
-                                            }
-                                        });
-                                    }
-                                    "color" => {
-                                        let mut c = self.settings.dither_color > 0.5;
-                                        if ui.checkbox(&mut c, "Color").changed() {
-                                            self.settings.dither_color = if c { 1.0 } else { 0.0 };
-                                            menu_changed = true;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                                if ui.button("OK").clicked() {
-                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::DitherList;
-                                }
-                            }
+                    ui.vertical(|ui| {
+                        ui.label("FORMAT");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
+                        });
+                        
+                        ui.separator();
+                        ui.label("SETTINGS");
+                        if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp {
+                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality"));
+                        } else {
+                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)"));
                         }
+                        
+                        ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
+                        
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("SIZE");
+                            if ui.selectable_label(self.export_settings.use_percentage, "%").clicked() {
+                                self.export_settings.use_percentage = true;
+                            }
+                            if ui.selectable_label(!self.export_settings.use_percentage, "px").clicked() {
+                                self.export_settings.use_percentage = false;
+                            }
+                        });
+
+                        if self.export_settings.use_percentage {
+                            if ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale")).changed() {
+                                if let Some(img) = &self.current_image {
+                                    self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32;
+                                    self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32;
+                                }
+                            }
+                        } else {
+                            ui.horizontal(|ui| {
+                                let mut w = self.export_settings.width_px;
+                                let mut h = self.export_settings.height_px;
+                                
+                                if ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: ")).changed() {
+                                    if self.export_settings.link_aspect {
+                                        if let Some(img) = &self.current_image {
+                                            let ratio = img.height() as f32 / img.width() as f32;
+                                            h = (w as f32 * ratio) as u32;
+                                        }
+                                    }
+                                    self.export_settings.width_px = w;
+                                    self.export_settings.height_px = h;
+                                }
+                                
+                                let chain_icon = if self.export_settings.link_aspect { "🔗" } else { "🔓" };
+                                if ui.button(chain_icon).clicked() {
+                                    self.export_settings.link_aspect = !self.export_settings.link_aspect;
+                                }
+
+                                if ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: ")).changed() {
+                                    if self.export_settings.link_aspect {
+                                        if let Some(img) = &self.current_image {
+                                            let ratio = img.width() as f32 / img.height() as f32;
+                                            w = (h as f32 * ratio) as u32;
+                                        }
+                                    }
+                                    self.export_settings.width_px = w;
+                                    self.export_settings.height_px = h;
+                                }
+                            });
+                        }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            if ui.button("Export").clicked() {
+                                self.export_image();
+                                close = true;
+                            }
+                        });
                     });
                 });
-
-            if close_menu || (ctx.input(|i| i.pointer.any_pressed()) && !ctx.is_using_pointer()) {
-                self.quick_menu = None;
+            if close {
+                self.show_export_window = false;
             }
+        }
 
-            if menu_changed && self.egui_texture_id.is_some() {
-                if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
-                    self.pipeline.render(
-                        device,
-                        queue,
-                        &input.create_view(&wgpu::TextureViewDescriptor::default()),
-                        &output.create_view(&wgpu::TextureViewDescriptor::default()),
-                        &self.settings,
-                    );
-                }
+        if changed && self.egui_texture_id.is_some() {
+            if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
+                self.pipeline.render(
+                    device,
+                    queue,
+                    &input.create_view(&wgpu::TextureViewDescriptor::default()),
+                    &output.create_view(&wgpu::TextureViewDescriptor::default()),
+                    &self.settings,
+                );
             }
         }
     }
 }
 
 fn setup_custom_style(ctx: &egui::Context) {
-    let mut style: egui::Style = (*ctx.style()).clone();
-    
-    let matrix_green = egui::Color32::from_rgb(0, 255, 65);
-    let black = egui::Color32::from_rgb(10, 10, 10);
+    // ... (keep existing)
+}
 
-    style.visuals.dark_mode = true;
-    style.visuals.override_text_color = Some(matrix_green);
-    style.visuals.widgets.noninteractive.bg_fill = black;
-    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-    
-    style.visuals.widgets.inactive.bg_fill = black;
-    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-    
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(20, 20, 20);
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, matrix_green);
-    
-    style.visuals.widgets.active.bg_fill = matrix_green;
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(2.0, black);
-
-    style.visuals.selection.bg_fill = matrix_green.linear_multiply(0.3);
-
-    ctx.set_style(style);
+fn color_add(c: egui::Color32, r: i16, g: i16, b: i16) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(
+        (c.r() as i16 + r).clamp(0, 255) as u8,
+        (c.g() as i16 + g).clamp(0, 255) as u8,
+        (c.b() as i16 + b).clamp(0, 255) as u8,
+        255,
+    )
 }
