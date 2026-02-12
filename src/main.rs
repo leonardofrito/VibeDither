@@ -4,7 +4,7 @@ mod spline;
 
 use eframe::{egui, egui_wgpu};
 use pipeline::{Pipeline, ColorSettings};
-use image::{DynamicImage, GenericImageView, ImageEncoder};
+use image::{DynamicImage, GenericImageView};
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
@@ -38,7 +38,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -49,6 +49,7 @@ struct VibeDitherApp {
     selected_stop_id: Option<u64>, next_stop_id: u64, curve_points: Vec<egui::Pos2>,
     dragging_point_idx: Option<usize>, active_tab: Tab, zoom_factor: f32, fit_to_screen: bool, pan_offset: egui::Vec2,
     focus: KeyboardFocus, last_edit_time: f64, show_export_window: bool, export_settings: ExportSettings,
+    export_row: usize, export_col: usize,
 }
 
 impl VibeDitherApp {
@@ -70,6 +71,7 @@ impl VibeDitherApp {
             pipeline, current_image: None, device, queue, renderer, target_format, input_texture: None, output_texture: None, egui_texture_id: None,
             settings: ColorSettings::default(), curves_data, gradient_data, gradient_stops, selected_stop_id: Some(0), next_stop_id: 2, curve_points, dragging_point_idx: None,
             active_tab: Tab::Adjust, zoom_factor: 1.0, fit_to_screen: false, pan_offset: egui::Vec2::ZERO, focus: KeyboardFocus::Main, last_edit_time: 0.0, show_export_window: false, export_settings: ExportSettings::default(),
+            export_row: 0, export_col: 0,
         }
     }
 
@@ -101,15 +103,19 @@ impl VibeDitherApp {
     }
 
     fn load_image_to_gpu(&mut self, _ctx: &egui::Context, img: DynamicImage) {
-        self.reset_adjustments(); let Some(device) = &self.device else { return }; let Some(queue) = &self.queue else { return }; let Some(renderer) = &self.renderer else { return };
-        let input_tex = self.pipeline.create_texture_from_image(device, queue, &img);
+        self.reset_adjustments();
+        let Some(device) = self.device.clone() else { return };
+        let Some(queue) = self.queue.clone() else { return };
+        let Some(renderer) = self.renderer.clone() else { return };
+        
+        let input_tex = self.pipeline.create_texture_from_image(&device, &queue, &img);
         let output_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("output_texture"), size: input_tex.size(), mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: self.target_format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
-        let tex_id = renderer.write().register_native_texture(device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
-        self.pipeline.update_curves(queue, &self.curves_data); self.pipeline.update_gradient(queue, &self.gradient_data);
+        let tex_id = renderer.write().register_native_texture(&device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
+        self.pipeline.update_curves(&queue, &self.curves_data); self.pipeline.update_gradient(&queue, &self.gradient_data);
         self.current_image = Some(img.clone()); self.export_settings.width_px = img.width(); self.export_settings.height_px = img.height();
         self.input_texture = Some(input_tex); self.output_texture = Some(output_tex); self.egui_texture_id = Some(tex_id);
         if let (Some(input), Some(output)) = (&self.input_texture, &self.output_texture) {
-            self.pipeline.render(device, queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
+            self.pipeline.render(&device, &queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
         }
     }
 
@@ -134,17 +140,17 @@ impl VibeDitherApp {
                 if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg { dimg = image::DynamicImage::ImageRgb8(dimg.to_rgb8()); }
                 let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WebP") };
                 let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
-                let d_name = d_names.get(self.settings.dither_type as usize).unwrap_or(&"Custom");
+                let d_idx = self.settings.dither_type as usize;
+                let d_name = d_names.get(d_idx).unwrap_or(&"Custom");
                 let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
-                let default_name = format!("VibeDither_{}{}.{}", d_name, color_suffix, ext);
-                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&default_name).save_file() {
+                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&format!("VibeDither_{}{}.{}", d_name, color_suffix, ext)).save_file() {
                     match self.export_settings.format {
                         ExportFormat::Png => {
                             let mut f = std::fs::File::create(&path).unwrap();
                             let level = if self.export_settings.compression > 0.8 { image::codecs::png::CompressionType::Best } else if self.export_settings.compression > 0.3 { image::codecs::png::CompressionType::Default } else { image::codecs::png::CompressionType::Fast };
                             let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut f, level, image::codecs::png::FilterType::Adaptive);
                             let (w, h) = dimg.dimensions(); let color_type = dimg.color();
-                            encoder.write_image(dimg.as_bytes(), w, h, color_type).ok();
+                            encoder.encode(dimg.as_bytes(), w, h, color_type).ok();
                         },
                         ExportFormat::Jpg => {
                             let mut f = std::fs::File::create(&path).unwrap();
@@ -163,12 +169,14 @@ impl VibeDitherApp {
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up, k_down, k_left, k_right, shift, _ctrl, keys_0_9) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
-            i.key_down(egui::Key::ArrowUp) || i.key_down(egui::Key::W), i.key_down(egui::Key::ArrowDown) || i.key_down(egui::Key::S), i.key_down(egui::Key::ArrowLeft) || i.key_down(egui::Key::A), i.key_down(egui::Key::ArrowRight) || i.key_down(egui::Key::D),
+            i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
             [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)]
         ));
+
+        if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
 
         for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; } }
 
@@ -176,11 +184,11 @@ impl eframe::App for VibeDitherApp {
             self.focus = match self.focus {
                 KeyboardFocus::Editing(_) => if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
                 KeyboardFocus::Light | KeyboardFocus::Color => KeyboardFocus::Adjust,
-                KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu => KeyboardFocus::Dither,
+                KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu | KeyboardFocus::Export => KeyboardFocus::Dither,
                 KeyboardFocus::GradientPointEdit => KeyboardFocus::GradientMapMenu,
                 _ => KeyboardFocus::Main,
             };
-            self.show_export_window = false;
+            if self.focus != KeyboardFocus::Export { self.show_export_window = false; }
         }
 
         match self.focus {
@@ -204,8 +212,8 @@ impl eframe::App for VibeDitherApp {
                 if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                 let now = ctx.input(|i| i.time);
                 if now - self.last_edit_time > 0.166 {
-                    if k_left || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
-                    if k_right || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
+                    if k_left_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
+                    if k_right_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
                 }
                 if space { self.focus = KeyboardFocus::GradientPointEdit; }
                 if k_n { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
@@ -227,8 +235,8 @@ impl eframe::App for VibeDitherApp {
                             if k_f { hsva.h = (hsva.h - h_step + 1.0).fract(); st_ch = true; }
                             if k_g { hsva.s = (hsva.s - sv_step).clamp(0.0, 1.0); st_ch = true; }
                             if k_h { hsva.v = (hsva.v - sv_step).clamp(0.0, 1.0); st_ch = true; }
-                            if k_left || k_a { stop.pos = (stop.pos - 0.01).clamp(0.0, 1.0); st_ch = true; }
-                            if k_right || k_d { stop.pos = (stop.pos + 0.01).clamp(0.0, 1.0); st_ch = true; }
+                            if k_left_p { stop.pos = (stop.pos - 0.01).clamp(0.0, 1.0); st_ch = true; }
+                            if k_right_p { stop.pos = (stop.pos + 0.01).clamp(0.0, 1.0); st_ch = true; }
                             if st_ch { stop.color = egui::Color32::from(hsva); }
                         }
                     }
@@ -242,12 +250,12 @@ impl eframe::App for VibeDitherApp {
             }
             KeyboardFocus::Editing(id) => {
                 if space { self.focus = if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither }; }
-                let delta = if k_right || k_up { 1.0 } else if k_left || k_down { -1.0 } else { 0.0 };
-                if delta != 0.0 {
-                    let now = ctx.input(|i| i.time);
-                    if now - self.last_edit_time > 0.166 {
+                let now = ctx.input(|i| i.time);
+                if now - self.last_edit_time > 0.166 {
+                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                    if delta != 0.0 {
                         let mut act_step = if shift { 0.1 } else { 0.05 };
-                        if id == "exposure" { act_step = if shift { 0.5 } else { 0.15 }; }
+                        if id == "exposure" { act_step = if shift { 0.15 } else { 0.05 }; }
                         if id == "scale" || id == "posterize" { act_step = 1.0; if shift { act_step = 2.0; } }
                         match id {
                             "exposure" => self.settings.exposure = (self.settings.exposure + delta * act_step).clamp(-5.0, 5.0),
@@ -270,26 +278,73 @@ impl eframe::App for VibeDitherApp {
                     }
                 }
             }
+            KeyboardFocus::Export => {
+                if k_up_p { self.export_row = self.export_row.saturating_sub(1); }
+                if k_down_p { self.export_row = (self.export_row + 1).min(5); }
+                if k_left_p { self.export_col = self.export_col.saturating_sub(1); }
+                if k_right_p { self.export_col = (self.export_col + 1).min(2); }
+                if space {
+                    match (self.export_row, self.export_col) {
+                        (0, 0) => self.export_settings.format = ExportFormat::Png,
+                        (0, 1) => self.export_settings.format = ExportFormat::Jpg,
+                        (0, 2) => self.export_settings.format = ExportFormat::Webp,
+                        (2, _) => if self.export_settings.format != ExportFormat::Jpg { self.export_settings.transparency = !self.export_settings.transparency; },
+                        (3, 0) => self.export_settings.use_percentage = true,
+                        (3, 1) => self.export_settings.use_percentage = false,
+                        (4, 1) => self.export_settings.link_aspect = !self.export_settings.link_aspect,
+                        (5, 0) => { self.show_export_window = false; self.focus = KeyboardFocus::Main; },
+                        (5, 1) => { self.export_image(); self.show_export_window = false; self.focus = KeyboardFocus::Main; },
+                        _ => {}
+                    }
+                }
+                let now = ctx.input(|i| i.time);
+                if now - self.last_edit_time > 0.1 {
+                    let delta = if k_right_p { 1.0 } else if k_left_p { -1.0 } else { 0.0 };
+                    if delta != 0.0 {
+                        match self.export_row {
+                            1 => self.export_settings.compression = (self.export_settings.compression + delta * 0.05).clamp(0.0, 1.0),
+                            4 => if self.export_settings.use_percentage {
+                                self.export_settings.percentage = (self.export_settings.percentage + delta * 0.1).clamp(0.1, 5.0);
+                                if let Some(img) = &self.current_image {
+                                    self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32;
+                                    self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32;
+                                }
+                            } else {
+                                if self.export_col == 0 {
+                                    self.export_settings.width_px = (self.export_settings.width_px as f32 + delta * 10.0).clamp(1.0, 16384.0) as u32;
+                                    if self.export_settings.link_aspect { if let Some(img) = &self.current_image { self.export_settings.height_px = (self.export_settings.width_px as f32 * (img.height() as f32 / img.width() as f32)) as u32; } }
+                                } else if self.export_col == 2 {
+                                    self.export_settings.height_px = (self.export_settings.height_px as f32 + delta * 10.0).clamp(1.0, 16384.0) as u32;
+                                    if self.export_settings.link_aspect { if let Some(img) = &self.current_image { self.export_settings.width_px = (self.export_settings.height_px as f32 * (img.width() as f32 / img.height() as f32)) as u32; } }
+                                }
+                            },
+                            _ => {}
+                        }
+                        self.last_edit_time = now;
+                    }
+                }
+            }
         }
 
         egui::TopBottomPanel::top("top_shortcuts").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("[{}]", match self.focus {
-                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING",
+                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING", KeyboardFocus::Export => "EXPORT",
                 }));
                 ui.separator();
                 let shortcuts = match self.focus {
-                    KeyboardFocus::Main => "A:Adjust  D:Dither  Esc:Back  0-9:Zoom",
+                    KeyboardFocus::Main => "A:Adjust  D:Dither  Ctrl+S:Export  Esc:Back  0-9:Zoom",
                     KeyboardFocus::Adjust => "Q:Light  E:Color  Esc:Back",
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back",
-                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
                     KeyboardFocus::ModeSelection => "A:None S:Thresh D:Rand F:Bayer G:Blue H:Diff J:Stucki K:Atkin L:Grad C:Latt",
                     KeyboardFocus::PosterizeMenu => "E:Toggle  Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
                     KeyboardFocus::GradientMapMenu => "E:Toggle  A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
                     KeyboardFocus::GradientPointEdit => "R,T,Y/F,G,H:HSB +/-  A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
+                    KeyboardFocus::Export => "AWSD:Navigate  Space:Toggle/Confirm  Esc:Back",
                 };
                 ui.label(shortcuts);
             });
@@ -315,7 +370,7 @@ impl eframe::App for VibeDitherApp {
                 ui.label("IMAGE CONTROLS");
                 if ui.button("Load Image").clicked() { if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp"]).pick_file() { if let Ok(img) = image_io::load_from_path(&path) { self.load_image_to_gpu(ctx, img); } } }
                 if ui.button("Paste from Clipboard").clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); } }
-                if ui.button("Export Image").clicked() { self.show_export_window = true; }
+                if ui.button("Export Image").clicked() { self.show_export_window = true; self.focus = KeyboardFocus::Export; }
                 ui.separator();
                 ui.horizontal(|ui| { ui.selectable_value(&mut self.active_tab, Tab::Adjust, "ADJUST"); ui.selectable_value(&mut self.active_tab, Tab::Dither, "DITHER"); });
                 ui.separator();
@@ -484,28 +539,69 @@ impl eframe::App for VibeDitherApp {
 
         if self.show_export_window {
             let mut close = false;
+            let mut export_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO);
             egui::Window::new("Export Settings").collapsible(false).resizable(false).show(ctx, |ui| {
+                export_rect = ui.max_rect();
                 ui.vertical(|ui| {
                     ui.label("FORMAT");
-                    ui.horizontal(|ui| { ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG"); ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG"); ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP"); });
+                    ui.horizontal(|ui| { 
+                        let png_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
+                        let jpg_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
+                        let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
+                        if self.focus == KeyboardFocus::Export && self.export_row == 0 {
+                            let r = match self.export_col { 0 => png_btn.rect, 1 => jpg_btn.rect, _ => webp_btn.rect };
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                        }
+                    });
                     ui.separator(); ui.label("SETTINGS");
-                    if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp { ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality")); } else { ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)")); }
-                    ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
-                    ui.separator(); ui.horizontal(|ui| { ui.label("SIZE"); if ui.selectable_label(self.export_settings.use_percentage, "%").clicked() { self.export_settings.use_percentage = true; } if ui.selectable_label(!self.export_settings.use_percentage, "px").clicked() { self.export_settings.use_percentage = false; } });
-                    if self.export_settings.use_percentage { if ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale")).changed() { if let Some(img) = &self.current_image { self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32; self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32; } } }
-                    else {
+                    if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp { 
+                        let q_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality"));
+                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(q_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                    } else {
+                        let c_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)"));
+                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(c_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                    }
+                    let t_check = ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
+                    if self.focus == KeyboardFocus::Export && self.export_row == 2 { ui.painter().rect_stroke(t_check.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                    
+                    ui.separator(); ui.horizontal(|ui| { 
+                        ui.label("SIZE"); 
+                        let p_btn = ui.selectable_label(self.export_settings.use_percentage, "%");
+                        let px_btn = ui.selectable_label(!self.export_settings.use_percentage, "px");
+                        if self.focus == KeyboardFocus::Export && self.export_row == 3 {
+                            let r = if self.export_col == 0 { p_btn.rect } else { px_btn.rect };
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                        }
+                    });
+                    if self.export_settings.use_percentage { 
+                        let s_slider = ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale"));
+                        if self.focus == KeyboardFocus::Export && self.export_row == 4 { ui.painter().rect_stroke(s_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                    } else {
                         ui.horizontal(|ui| {
                             let mut w = self.export_settings.width_px; let mut h = self.export_settings.height_px;
-                            if ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: ")).changed() { if self.export_settings.link_aspect { if let Some(img) = &self.current_image { h = (w as f32 * (img.height() as f32 / img.width() as f32)) as u32; } } self.export_settings.width_px = w; self.export_settings.height_px = h; }
-                            if ui.button(if self.export_settings.link_aspect { "🔗" } else { "🔓" }).clicked() { self.export_settings.link_aspect = !self.export_settings.link_aspect; }
-                            if ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: ")).changed() { if self.export_settings.link_aspect { if let Some(img) = &self.current_image { w = (h as f32 * (img.width() as f32 / img.height() as f32)) as u32; } } self.export_settings.width_px = w; self.export_settings.height_px = h; }
+                            let w_drag = ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: "));
+                            let link_btn = ui.button(if self.export_settings.link_aspect { "🔗" } else { "🔓" });
+                            let h_drag = ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: "));
+                            if self.focus == KeyboardFocus::Export && self.export_row == 4 {
+                                let r = match self.export_col { 0 => w_drag.rect, 1 => link_btn.rect, _ => h_drag.rect };
+                                ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                            }
+                            self.export_settings.width_px = w; self.export_settings.height_px = h;
                         });
                     }
                     ui.separator();
-                    ui.horizontal(|ui| { if ui.button("Cancel").clicked() { close = true; } if ui.button("Export").clicked() { self.export_image(); close = true; } });
+                    ui.horizontal(|ui| { 
+                        let c_btn = ui.button("Cancel"); 
+                        let e_btn = ui.button("Export"); 
+                        if self.focus == KeyboardFocus::Export && self.export_row == 5 {
+                            let r = if self.export_col == 0 { c_btn.rect } else { e_btn.rect };
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                        }
+                        if c_btn.clicked() { close = true; } if e_btn.clicked() { self.export_image(); close = true; } 
+                    });
                 });
             });
-            if close { self.show_export_window = false; }
+            if close { self.show_export_window = false; self.focus = KeyboardFocus::Main; }
         }
     }
 }
