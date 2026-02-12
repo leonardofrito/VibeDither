@@ -4,7 +4,7 @@ mod spline;
 
 use eframe::{egui, egui_wgpu};
 use pipeline::{Pipeline, ColorSettings};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView, ImageEncoder};
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
@@ -313,7 +313,22 @@ impl VibeDitherApp {
             for row in 0..height {
                 let start = (row * padded_bytes_per_row) as usize;
                 let end = start + (width * 4) as usize;
-                pixels.extend_from_slice(&data[start..end]);
+                let row_pixels = &data[start..end];
+                
+                for chunk in row_pixels.chunks_exact(4) {
+                    // Manual gamma correction (approximate linear to sRGB)
+                    // If the export is dark, it means the viewer thinks it's sRGB but the values are linear.
+                    // Using 2.4 instead of 2.2 to see if it matches better as 2.2 was still "slightly dark"
+                    let r = (chunk[0] as f32 / 255.0).powf(1.0/2.4) * 255.0;
+                    let g = (chunk[1] as f32 / 255.0).powf(1.0/2.4) * 255.0;
+                    let b = (chunk[2] as f32 / 255.0).powf(1.0/2.4) * 255.0;
+                    let a = chunk[3];
+                    
+                    pixels.push(r as u8);
+                    pixels.push(g as u8);
+                    pixels.push(b as u8);
+                    pixels.push(a);
+                }
             }
             drop(data);
             staging_buffer.unmap();
@@ -323,6 +338,9 @@ impl VibeDitherApp {
                 let mut dynamic_img = image::DynamicImage::ImageRgba8(img_buffer);
                 
                 // Resize if needed
+                if dynamic_img.width() != self.export_settings.width_px || dynamic_img.height() != self.export_settings.height_px {
+                    dynamic_img = dynamic_img.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
+                }
                 if dynamic_img.width() != self.export_settings.width_px || dynamic_img.height() != self.export_settings.height_px {
                     dynamic_img = dynamic_img.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
                 }
@@ -345,14 +363,30 @@ impl VibeDitherApp {
                     .set_file_name(&format!("vibe_dither_export.{}", ext))
                     .save_file() {
                     
-                    let _quality = (self.export_settings.compression * 100.0) as u8;
                     match self.export_settings.format {
-                        ExportFormat::Png => { dynamic_img.save(path).ok(); },
-                        ExportFormat::Jpg => {
-                            let mut file = std::fs::File::create(path).unwrap();
-                            dynamic_img.write_to(&mut file, image::ImageFormat::Jpeg).ok();
+                        ExportFormat::Png => { 
+                            let mut file = std::fs::File::create(&path).unwrap();
+                            let level = if self.export_settings.compression > 0.8 {
+                                image::codecs::png::CompressionType::Best
+                            } else if self.export_settings.compression > 0.3 {
+                                image::codecs::png::CompressionType::Default
+                            } else {
+                                image::codecs::png::CompressionType::Fast
+                            };
+                            let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut file, level, image::codecs::png::FilterType::Adaptive);
+                            let (w, h) = dynamic_img.dimensions();
+                            let color_type = dynamic_img.color();
+                            encoder.write_image(dynamic_img.as_bytes(), w, h, color_type).ok();
                         },
-                        ExportFormat::Webp => { dynamic_img.save(path).ok(); },
+                        ExportFormat::Jpg => {
+                            let mut file = std::fs::File::create(&path).unwrap();
+                            let quality = (self.export_settings.compression * 100.0).clamp(1.0, 100.0) as u8;
+                            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, quality);
+                            encoder.encode_image(&dynamic_img).ok();
+                        },
+                        ExportFormat::Webp => { 
+                            dynamic_img.save(path).ok(); 
+                        },
                     }
                 }
             }
@@ -844,8 +878,13 @@ impl eframe::App for VibeDitherApp {
                         
                         ui.separator();
                         ui.label("SETTINGS");
-                        ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression"));
-                        ui.checkbox(&mut self.export_settings.transparency, "Enable Transparency");
+                        if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp {
+                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality"));
+                        } else {
+                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)"));
+                        }
+                        
+                        ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
                         
                         ui.separator();
                         ui.horizontal(|ui| {
