@@ -74,6 +74,21 @@ impl Default for ExportSettings {
     }
 }
 
+#[derive(PartialEq, Clone)]
+enum MenuLevel {
+    Main,
+    AdjustList,
+    DitherList,
+    SingleAdjustment(&'static str),
+    SingleDither(&'static str),
+}
+
+#[derive(Clone)]
+struct QuickMenuState {
+    pos: egui::Pos2,
+    level: MenuLevel,
+}
+
 struct VibeDitherApp {
     pipeline: Pipeline,
     current_image: Option<DynamicImage>,
@@ -95,9 +110,12 @@ struct VibeDitherApp {
     dragging_point_idx: Option<usize>,
     // UI state
     active_tab: Tab,
-    // Zoom state
+    // View state
     zoom_factor: f32,
     fit_to_screen: bool,
+    pan_offset: egui::Vec2,
+    // Quick Menu
+    quick_menu: Option<QuickMenuState>,
     // Export state
     show_export_window: bool,
     export_settings: ExportSettings,
@@ -157,6 +175,8 @@ impl VibeDitherApp {
             active_tab: Tab::Adjust,
             zoom_factor: 1.0,
             fit_to_screen: false,
+            pan_offset: egui::Vec2::ZERO,
+            quick_menu: None,
             show_export_window: false,
             export_settings: ExportSettings::default(),
         }
@@ -868,17 +888,52 @@ impl eframe::App for VibeDitherApp {
             if let Some(tex_id) = self.egui_texture_id {
                 let img_size = self.current_image.as_ref().map(|img| egui::vec2(img.width() as f32, img.height() as f32)).unwrap_or(egui::Vec2::ZERO);
                 
+                let (rect, response) = ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
+
+                // --- Handle Zoom ---
+                let scroll_delta = ui.input(|i| i.smooth_scroll_delta.y);
+                if scroll_delta != 0.0 {
+                    let zoom_speed = 0.002;
+                    let old_zoom = self.zoom_factor;
+                    self.zoom_factor = (self.zoom_factor * (1.0 + scroll_delta * zoom_speed)).clamp(0.1, 32.0);
+                    self.fit_to_screen = false;
+                    
+                    // Zoom towards mouse
+                    if let Some(mouse_pos) = ui.input(|i| i.pointer.hover_pos()) {
+                        let relative_pos = mouse_pos - rect.center() - self.pan_offset;
+                        let zoom_ratio = self.zoom_factor / old_zoom;
+                        self.pan_offset -= relative_pos * (zoom_ratio - 1.0);
+                    }
+                }
+
+                // --- Handle Pan ---
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    self.pan_offset += response.drag_delta();
+                }
+
+                // --- Handle Quick Menu Trigger ---
+                if response.clicked() {
+                    if let Some(pos) = response.interact_pointer_pos() {
+                        self.quick_menu = Some(QuickMenuState {
+                            pos,
+                            level: MenuLevel::Main,
+                        });
+                    }
+                }
+
                 let display_size = if self.fit_to_screen {
-                    let available = ui.available_size();
-                    let ratio = (available.x / img_size.x).min(available.y / img_size.y);
+                    let ratio = (rect.width() / img_size.x).min(rect.height() / img_size.y);
                     img_size * ratio
                 } else {
                     img_size * self.zoom_factor
                 };
 
-                egui::ScrollArea::both().show(ui, |ui| {
-                    ui.image(egui::load::SizedTexture::new(tex_id, display_size));
-                });
+                let image_rect = egui::Rect::from_center_size(rect.center() + self.pan_offset, display_size);
+                
+                // Use a clip rect to keep image within panel
+                ui.set_clip_rect(rect);
+                ui.painter().image(tex_id, image_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+
             } else {
                 ui.centered_and_justified(|ui| {
                     ui.label("Drag and drop an image or use 'Load Image'");
@@ -887,96 +942,140 @@ impl eframe::App for VibeDitherApp {
         });
 
         // --- Export Window ---
-        if self.show_export_window {
-            let mut close = false;
-            egui::Window::new("Export Settings")
-                .collapsible(false)
-                .resizable(false)
+        // ... (keep existing export window code)
+
+        // --- Quick Access Menu ---
+        if let Some(menu) = self.quick_menu.clone() {
+            let mut close_menu = false;
+            let mut menu_changed = false;
+
+            egui::Area::new(egui::Id::new("quick_menu"))
+                .fixed_pos(menu.pos)
                 .show(ctx, |ui| {
-                    ui.vertical(|ui| {
-                        ui.label("FORMAT");
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
-                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
-                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
-                        });
-                        
-                        ui.separator();
-                        ui.label("SETTINGS");
-                        if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp {
-                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality"));
-                        } else {
-                            ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)"));
-                        }
-                        
-                        ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
-                        
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.label("SIZE");
-                            if ui.selectable_label(self.export_settings.use_percentage, "%").clicked() {
-                                self.export_settings.use_percentage = true;
-                            }
-                            if ui.selectable_label(!self.export_settings.use_percentage, "px").clicked() {
-                                self.export_settings.use_percentage = false;
-                            }
-                        });
+                    let frame = egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(0, 0, 0))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)))
+                        .inner_margin(4.0);
 
-                        if self.export_settings.use_percentage {
-                            if ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale")).changed() {
-                                if let Some(img) = &self.current_image {
-                                    self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32;
-                                    self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32;
+                    frame.show(ui, |ui| {
+                        ui.set_max_width(200.0);
+                        match menu.level {
+                            MenuLevel::Main => {
+                                if ui.button("> ADJUST").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::AdjustList;
+                                }
+                                if ui.button("> DITHER").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::DitherList;
+                                }
+                                if ui.button("> CLOSE").clicked() {
+                                    close_menu = true;
                                 }
                             }
-                        } else {
-                            ui.horizontal(|ui| {
-                                let mut w = self.export_settings.width_px;
-                                let mut h = self.export_settings.height_px;
-                                
-                                if ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: ")).changed() {
-                                    if self.export_settings.link_aspect {
-                                        if let Some(img) = &self.current_image {
-                                            let ratio = img.height() as f32 / img.width() as f32;
-                                            h = (w as f32 * ratio) as u32;
+                            MenuLevel::AdjustList => {
+                                let adjs = [
+                                    ("Exposure", "exposure"), ("Contrast", "contrast"), 
+                                    ("Highlights", "highlights"), ("Shadows", "shadows"),
+                                    ("Whites", "whites"), ("Blacks", "blacks"),
+                                    ("Temp", "temperature"), ("Tint", "tint"),
+                                    ("Vibrance", "vibrance"), ("Saturation", "saturation"),
+                                    ("Sharpness", "sharpness")
+                                ];
+                                for (label, id) in adjs {
+                                    if ui.button(label).clicked() {
+                                        self.quick_menu.as_mut().unwrap().level = MenuLevel::SingleAdjustment(id);
+                                    }
+                                }
+                                if ui.button("< BACK").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::Main;
+                                }
+                            }
+                            MenuLevel::DitherList => {
+                                let diths = [
+                                    ("Pixel Scale", "scale"), ("Threshold", "threshold"),
+                                    ("Posterize", "posterize"), ("Matrix Size", "bayer"),
+                                    ("Color Mode", "color")
+                                ];
+                                for (label, id) in diths {
+                                    if ui.button(label).clicked() {
+                                        self.quick_menu.as_mut().unwrap().level = MenuLevel::SingleDither(id);
+                                    }
+                                }
+                                if ui.button("< BACK").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::Main;
+                                }
+                            }
+                            MenuLevel::SingleAdjustment(id) => {
+                                match id {
+                                    "exposure" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.exposure, -5.0..=5.0).text("Exp")).changed(),
+                                    "contrast" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.contrast, 0.0..=2.0).text("Con")).changed(),
+                                    "highlights" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.highlights, -1.0..=1.0).text("High")).changed(),
+                                    "shadows" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.shadows, -1.0..=1.0).text("Shad")).changed(),
+                                    "whites" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.whites, -1.0..=1.0).text("White")).changed(),
+                                    "blacks" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.blacks, -1.0..=1.0).text("Black")).changed(),
+                                    "temperature" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.temperature, -1.0..=1.0).text("Temp")).changed(),
+                                    "tint" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.tint, -1.0..=1.0).text("Tint")).changed(),
+                                    "vibrance" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.vibrance, -1.0..=1.0).text("Vib")).changed(),
+                                    "saturation" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.saturation, 0.0..=2.0).text("Sat")).changed(),
+                                    "sharpness" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.sharpness, 0.0..=2.0).text("Sharp")).changed(),
+                                    _ => {}
+                                }
+                                if ui.button("OK").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::AdjustList;
+                                }
+                            }
+                            MenuLevel::SingleDither(id) => {
+                                match id {
+                                    "scale" => {
+                                        let mut s = self.settings.dither_scale as i32;
+                                        if ui.add(egui::Slider::new(&mut s, 1..=32).text("Scale")).changed() {
+                                            self.settings.dither_scale = s as f32;
+                                            menu_changed = true;
                                         }
                                     }
-                                    self.export_settings.width_px = w;
-                                    self.export_settings.height_px = h;
-                                }
-                                
-                                let chain_icon = if self.export_settings.link_aspect { "🔗" } else { "🔓" };
-                                if ui.button(chain_icon).clicked() {
-                                    self.export_settings.link_aspect = !self.export_settings.link_aspect;
-                                }
-
-                                if ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: ")).changed() {
-                                    if self.export_settings.link_aspect {
-                                        if let Some(img) = &self.current_image {
-                                            let ratio = img.width() as f32 / img.height() as f32;
-                                            w = (h as f32 * ratio) as u32;
+                                    "threshold" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Thresh")).changed(),
+                                    "posterize" => menu_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 0.0..=64.0).text("Post")).changed(),
+                                    "bayer" => {
+                                        ui.horizontal(|ui| {
+                                            let sizes = [2, 3, 4, 8];
+                                            for s in sizes {
+                                                if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}", s)).clicked() {
+                                                    self.settings.bayer_size = s as f32;
+                                                    menu_changed = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                    "color" => {
+                                        let mut c = self.settings.dither_color > 0.5;
+                                        if ui.checkbox(&mut c, "Color").changed() {
+                                            self.settings.dither_color = if c { 1.0 } else { 0.0 };
+                                            menu_changed = true;
                                         }
                                     }
-                                    self.export_settings.width_px = w;
-                                    self.export_settings.height_px = h;
+                                    _ => {}
                                 }
-                            });
+                                if ui.button("OK").clicked() {
+                                    self.quick_menu.as_mut().unwrap().level = MenuLevel::DitherList;
+                                }
+                            }
                         }
-
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() {
-                                close = true;
-                            }
-                            if ui.button("Export").clicked() {
-                                self.export_image();
-                                close = true;
-                            }
-                        });
                     });
                 });
-            if close {
-                self.show_export_window = false;
+
+            if close_menu || (ctx.input(|i| i.pointer.any_pressed()) && !ctx.is_using_pointer()) {
+                self.quick_menu = None;
+            }
+
+            if menu_changed && self.egui_texture_id.is_some() {
+                if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
+                    self.pipeline.render(
+                        device,
+                        queue,
+                        &input.create_view(&wgpu::TextureViewDescriptor::default()),
+                        &output.create_view(&wgpu::TextureViewDescriptor::default()),
+                        &self.settings,
+                    );
+                }
             }
         }
     }
