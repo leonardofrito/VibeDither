@@ -26,21 +26,19 @@
         - Threshold (with adjustable threshold).
         - Random (White Noise).
         - Bayer (Ordered) with selectable Matrix Sizes: 2x2, 3x3, 4x4, 8x8.
+        - Advanced modes: Blue Noise, Stucki, Atkinson, Gradient Based, Lattice-Boltzmann.
         - Adjustable Pixel Scale (Resolution Scaling).
     - **I/O:** Drag & drop, Clipboard (Paste), and System File Picker.
 
-## Status: 2026-02-10
-- [x] Rust project initialization and `wgpu`/`egui` boilerplate.
-- [x] Implementation of full Adjustment suite.
-- [x] Implementation of Spline-based RGB Master Curves.
-- [x] Implementation of standard Dithering (Threshold, Random, Bayer).
-- [x] Multi-scale Bayer matrices (2x2 to 8x8).
-- [x] Fixed GPU memory alignment and Cyan slider responsiveness.
-- [ ] Disable linear pixel filtering (Switch to Nearest Neighbor for dither clarity).
-- [ ] Advanced Color Dithering approaches (Ordered Color, Error Diffusion).
-- [ ] Gradient Remap node system.
+## Status: 2026-02-12
+- [x] Disable linear pixel filtering (Nearest Neighbor for dither clarity).
+- [x] Advanced Color Dithering (Blue Noise, Stucki, Atkinson, Gradient, Lattice-Boltzmann).
+- [x] Gradient Remap multi-stop system.
+- [x] Integrated Posterize as a multi-level dither effect.
 - [ ] Image Export (Save to file/Copy to clipboard).
 
-## Notes for Tomorrow
-- **Pixel Filtering:** The image currently blurs when zoomed. Need to update the `wgpu` sampler in `src/pipeline/mod.rs` from `FilterMode::Linear` to `FilterMode::Nearest` to keep the dithered pixels sharp.
-- **Color Dithering:** Explore more sophisticated color dithering algorithms beyond simple per-channel thresholding.
+## Recent Achievements
+- Switched GPU sampler to `Nearest` for sharp pixel art/dither aesthetic.
+- Implemented a wide range of dithering approximations optimized for GPU fragment shaders.
+- Created a robust 1D texture-based Gradient Remap system with a custom UI for managing color stops.
+- Moved Posterization to the Dither pipeline, allowing for sophisticated multi-level dither patterns.

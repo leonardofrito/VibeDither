@@ -419,7 +419,18 @@ impl eframe::App for VibeDitherApp {
                             ui.label("DITHERING CONTROLS");
                             
                             let dither_type = self.settings.dither_type as usize;
-                            let dither_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Error Diffusion"];
+                            let dither_names = [
+                                "None", 
+                                "Threshold", 
+                                "Random", 
+                                "Bayer", 
+                                "Blue Noise", 
+                                "Diffusion Approx", 
+                                "Stucki",
+                                "Atkinson",
+                                "Gradient Based",
+                                "Lattice-Boltzmann"
+                            ];
                             
                             egui::ComboBox::from_label("Algorithm")
                                 .selected_text(dither_names[dither_type.min(dither_names.len() - 1)])

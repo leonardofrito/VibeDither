@@ -167,6 +167,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         } else if (d_type == 5) {
             let j = hash22(screen_pos);
             noise = (j.x + j.y + interleaved_gradient_noise(screen_pos)) / 3.0;
+        } else if (d_type == 6) {
+            let n1 = interleaved_gradient_noise(screen_pos);
+            let n2 = interleaved_gradient_noise(screen_pos + vec2<f32>(5.0, 3.0));
+            noise = fract(n1 * 0.75 + n2 * 0.25);
+        } else if (d_type == 7) {
+            // Atkinson Approx: Sparse and high contrast
+            let n = interleaved_gradient_noise(screen_pos);
+            noise = step(0.5, n) * 0.5 + 0.25; // Create a more "stepped" noise threshold
+        } else if (d_type == 8) {
+            // Gradient Based: Adjusts noise based on local luminance change
+            let dx = get_luminance(textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(1.0/tex_size.x, 0.0)).rgb) - get_luminance(color);
+            let dy = get_luminance(textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, 1.0/tex_size.y)).rgb) - get_luminance(color);
+            let edge = clamp(abs(dx) + abs(dy), 0.0, 1.0);
+            noise = mix(interleaved_gradient_noise(screen_pos), settings.dither_threshold, edge * 0.8);
+        } else if (d_type == 9) {
+            // Lattice-Boltzmann (Cellular/Fluid Approx)
+            let p = screen_pos * 0.4;
+            let n = sin(p.x) * cos(p.y) + sin(p.y * 0.5) * cos(p.x * 0.5);
+            noise = fract(n * 2.0 + interleaved_gradient_noise(screen_pos) * 0.5);
         }
 
         if (settings.dither_color > 0.5) {
