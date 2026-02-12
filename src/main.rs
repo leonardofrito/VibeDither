@@ -107,8 +107,20 @@ impl VibeDitherApp {
         let tex_id = renderer.write().register_native_texture(device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
         self.pipeline.update_curves(queue, &self.curves_data); self.pipeline.update_gradient(queue, &self.gradient_data);
         self.current_image = Some(img.clone()); self.export_settings.width_px = img.width(); self.export_settings.height_px = img.height();
-        self.input_texture = Some(input_tex); self.output_texture = Some(output_tex); self.egui_texture_id = Some(tex_id);
-    }
+                self.output_texture = Some(output_tex);
+                self.egui_texture_id = Some(tex_id);
+        
+                // Immediate render so the image appears instantly
+                if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
+                    self.pipeline.render(
+                        device,
+                        queue,
+                        &input.create_view(&wgpu::TextureViewDescriptor::default()),
+                        &output.create_view(&wgpu::TextureViewDescriptor::default()),
+                        &self.settings,
+                    );
+                }
+            }
 
     fn export_image(&mut self) {
         let (Some(device), Some(queue), Some(input_tex), Some(current_img)) = (&self.device, &self.queue, &self.input_texture, &self.current_image) else { return };
@@ -204,8 +216,23 @@ impl eframe::App for VibeDitherApp {
             KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
             KeyboardFocus::GradientMapMenu => {
                 if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
-                if k_left || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); } } } }
-                if k_right || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); } } } }
+                let now = ctx.input(|i| i.time);
+                if now - self.last_edit_time > 0.166 {
+                    if k_left || k_a {
+                        if let Some(id) = self.selected_stop_id {
+                            if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
+                                if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; }
+                            }
+                        }
+                    }
+                    if k_right || k_d {
+                        if let Some(id) = self.selected_stop_id {
+                            if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
+                                if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; }
+                            }
+                        }
+                    }
+                }
                 if space { self.focus = KeyboardFocus::GradientPointEdit; }
                 if k_n { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
                 if k_b { if let Some(id) = self.selected_stop_id { if self.gradient_stops.len() > 2 { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; } } }
