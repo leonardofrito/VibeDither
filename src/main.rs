@@ -107,20 +107,11 @@ impl VibeDitherApp {
         let tex_id = renderer.write().register_native_texture(device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
         self.pipeline.update_curves(queue, &self.curves_data); self.pipeline.update_gradient(queue, &self.gradient_data);
         self.current_image = Some(img.clone()); self.export_settings.width_px = img.width(); self.export_settings.height_px = img.height();
-                self.output_texture = Some(output_tex);
-                self.egui_texture_id = Some(tex_id);
-        
-                // Immediate render so the image appears instantly
-                if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
-                    self.pipeline.render(
-                        device,
-                        queue,
-                        &input.create_view(&wgpu::TextureViewDescriptor::default()),
-                        &output.create_view(&wgpu::TextureViewDescriptor::default()),
-                        &self.settings,
-                    );
-                }
-            }
+        self.input_texture = Some(input_tex); self.output_texture = Some(output_tex); self.egui_texture_id = Some(tex_id);
+        if let (Some(input), Some(output)) = (&self.input_texture, &self.output_texture) {
+            self.pipeline.render(device, queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
+        }
+    }
 
     fn export_image(&mut self) {
         let (Some(device), Some(queue), Some(input_tex), Some(current_img)) = (&self.device, &self.queue, &self.input_texture, &self.current_image) else { return };
@@ -145,7 +136,8 @@ impl VibeDitherApp {
                 let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
                 let d_name = d_names.get(self.settings.dither_type as usize).unwrap_or(&"Custom");
                 let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
-                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&format!("VibeDither_{}{}.{}", d_name, color_suffix, ext)).save_file() {
+                let default_name = format!("VibeDither_{}{}.{}", d_name, color_suffix, ext);
+                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&default_name).save_file() {
                     match self.export_settings.format {
                         ExportFormat::Png => {
                             let mut f = std::fs::File::create(&path).unwrap();
@@ -171,7 +163,7 @@ impl VibeDitherApp {
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up, k_down, k_left, k_right, shift, ctrl, keys_0_9) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up, k_down, k_left, k_right, shift, _ctrl, keys_0_9) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_down(egui::Key::ArrowUp) || i.key_down(egui::Key::W), i.key_down(egui::Key::ArrowDown) || i.key_down(egui::Key::S), i.key_down(egui::Key::ArrowLeft) || i.key_down(egui::Key::A), i.key_down(egui::Key::ArrowRight) || i.key_down(egui::Key::D),
             i.modifiers.shift, i.modifiers.ctrl,
@@ -194,14 +186,8 @@ impl eframe::App for VibeDitherApp {
         match self.focus {
             KeyboardFocus::Main => { if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
             KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
-            KeyboardFocus::Light => {
-                if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); }
-                if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); }
-            }
-            KeyboardFocus::Color => {
-                if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); }
-                if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); }
-            }
+            KeyboardFocus::Light => { if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); } if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
+            KeyboardFocus::Color => { if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); } if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
             KeyboardFocus::Dither => {
                 if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } if k_p { self.focus = KeyboardFocus::PosterizeMenu; }
                 if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
@@ -218,20 +204,8 @@ impl eframe::App for VibeDitherApp {
                 if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                 let now = ctx.input(|i| i.time);
                 if now - self.last_edit_time > 0.166 {
-                    if k_left || k_a {
-                        if let Some(id) = self.selected_stop_id {
-                            if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
-                                if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; }
-                            }
-                        }
-                    }
-                    if k_right || k_d {
-                        if let Some(id) = self.selected_stop_id {
-                            if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) {
-                                if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; }
-                            }
-                        }
-                    }
+                    if k_left || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
+                    if k_right || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
                 }
                 if space { self.focus = KeyboardFocus::GradientPointEdit; }
                 if k_n { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
@@ -274,6 +248,7 @@ impl eframe::App for VibeDitherApp {
                     if now - self.last_edit_time > 0.166 {
                         let mut act_step = if shift { 0.1 } else { 0.05 };
                         if id == "exposure" { act_step = if shift { 0.5 } else { 0.15 }; }
+                        if id == "scale" || id == "posterize" { act_step = 1.0; if shift { act_step = 2.0; } }
                         match id {
                             "exposure" => self.settings.exposure = (self.settings.exposure + delta * act_step).clamp(-5.0, 5.0),
                             "contrast" => self.settings.contrast = (self.settings.contrast + delta * act_step).clamp(0.0, 2.0),
@@ -286,9 +261,9 @@ impl eframe::App for VibeDitherApp {
                             "tint" => self.settings.tint = (self.settings.tint + delta * act_step).clamp(-1.0, 1.0),
                             "saturation" => self.settings.saturation = (self.settings.saturation + delta * act_step).clamp(0.0, 2.0),
                             "vibrance" => self.settings.vibrance = (self.settings.vibrance + delta * act_step).clamp(-1.0, 1.0),
-                            "scale" => self.settings.dither_scale = (self.settings.dither_scale + delta * act_step * 10.0).clamp(1.0, 32.0),
+                            "scale" => self.settings.dither_scale = (self.settings.dither_scale + delta * act_step).clamp(1.0, 32.0),
                             "threshold" => self.settings.dither_threshold = (self.settings.dither_threshold + delta * act_step).clamp(0.0, 1.0),
-                            "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + delta * act_step * 10.0).clamp(0.0, 64.0),
+                            "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + delta * act_step).clamp(0.0, 64.0),
                             _ => {}
                         }
                         self.last_edit_time = now; changed = true;
@@ -309,12 +284,12 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back",
+                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
                     KeyboardFocus::ModeSelection => "A:None S:Thresh D:Rand F:Bayer G:Blue H:Diff J:Stucki K:Atkin L:Grad C:Latt",
                     KeyboardFocus::PosterizeMenu => "E:Toggle  Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
                     KeyboardFocus::GradientMapMenu => "E:Toggle  A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
                     KeyboardFocus::GradientPointEdit => "R,T,Y/F,G,H:HSB +/-  A/D:Move  Shift:Fine  Space:Done",
-                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
                 };
                 ui.label(shortcuts);
             });
@@ -468,7 +443,7 @@ impl eframe::App for VibeDitherApp {
                                     }
                                 });
                             });
-                            if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
+                            if stops_ch || side_changed { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
                         });
                     },
                 }
@@ -533,10 +508,6 @@ impl eframe::App for VibeDitherApp {
             if close { self.show_export_window = false; }
         }
     }
-}
-
-fn color_add(c: egui::Color32, r: i16, g: i16, b: i16) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied((c.r() as i16 + r).clamp(0, 255) as u8, (c.g() as i16 + g).clamp(0, 255) as u8, (c.b() as i16 + b).clamp(0, 255) as u8, 255)
 }
 
 fn setup_custom_style(ctx: &egui::Context) {
