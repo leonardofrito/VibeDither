@@ -156,7 +156,7 @@ impl VibeDitherApp {
             dragging_point_idx: None,
             active_tab: Tab::Adjust,
             zoom_factor: 1.0,
-            fit_to_screen: true,
+            fit_to_screen: false,
             show_export_window: false,
             export_settings: ExportSettings::default(),
         }
@@ -261,11 +261,30 @@ impl VibeDitherApp {
     }
 
     fn export_image(&mut self) {
-        let (Some(device), Some(queue), Some(output_tex), Some(current_img)) = (&self.device, &self.queue, &self.output_texture, &self.current_image) else { return };
+        let (Some(device), Some(queue), Some(input_tex), Some(current_img)) = (&self.device, &self.queue, &self.input_texture, &self.current_image) else { return };
         
         let width = current_img.width();
         let height = current_img.height();
         
+        let output_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("export_output_texture"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        self.pipeline.render(
+            device,
+            queue,
+            &input_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            &output_tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            &self.settings,
+        );
+
         // 1. Staging buffer for readback
         let bytes_per_pixel = 4;
         let unpadded_bytes_per_row = width * bytes_per_pixel;
@@ -283,7 +302,7 @@ impl VibeDitherApp {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("export_encoder") });
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
-                texture: output_tex,
+                texture: &output_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -316,14 +335,10 @@ impl VibeDitherApp {
                 let row_pixels = &data[start..end];
                 
                 for chunk in row_pixels.chunks_exact(4) {
-                    // Manual gamma correction (approximate linear to sRGB)
-                    // If the export is dark, it means the viewer thinks it's sRGB but the values are linear.
-                    // Using 2.4 instead of 2.2 to see if it matches better as 2.2 was still "slightly dark"
                     let r = (chunk[0] as f32 / 255.0).powf(1.0/2.4) * 255.0;
                     let g = (chunk[1] as f32 / 255.0).powf(1.0/2.4) * 255.0;
                     let b = (chunk[2] as f32 / 255.0).powf(1.0/2.4) * 255.0;
                     let a = chunk[3];
-                    
                     pixels.push(r as u8);
                     pixels.push(g as u8);
                     pixels.push(b as u8);
@@ -337,7 +352,7 @@ impl VibeDitherApp {
             if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, pixels) {
                 let mut dynamic_img = image::DynamicImage::ImageRgba8(img_buffer);
                 
-                // Resize if needed
+                // Final resize to user's requested export dimensions
                 if dynamic_img.width() != self.export_settings.width_px || dynamic_img.height() != self.export_settings.height_px {
                     dynamic_img = dynamic_img.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
                 }
@@ -358,9 +373,19 @@ impl VibeDitherApp {
                     ExportFormat::Webp => ("webp", "WebP"),
                 };
 
+                let dither_names = [
+                    "None", "Threshold", "Random", "Bayer", "BlueNoise", 
+                    "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"
+                ];
+                let dither_idx = self.settings.dither_type as usize;
+                let dither_name = dither_names.get(dither_idx).unwrap_or(&"Custom");
+                
+                let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
+                let default_name = format!("VibeDither_{}{}.{}", dither_name, color_suffix, ext);
+
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter(filter, &[ext])
-                    .set_file_name(&format!("vibe_dither_export.{}", ext))
+                    .set_file_name(&default_name)
                     .save_file() {
                     
                     match self.export_settings.format {
