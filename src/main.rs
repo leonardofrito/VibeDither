@@ -38,7 +38,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, ColorDitherMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -172,7 +172,7 @@ impl eframe::App for VibeDitherApp {
             self.focus = match self.focus {
                 KeyboardFocus::Editing(_) => if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
                 KeyboardFocus::Light | KeyboardFocus::Color => KeyboardFocus::Adjust,
-                KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::ColorDitherMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu => KeyboardFocus::Dither,
+                KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu => KeyboardFocus::Dither,
                 KeyboardFocus::GradientPointEdit => KeyboardFocus::GradientMapMenu,
                 _ => KeyboardFocus::Main,
             };
@@ -193,16 +193,17 @@ impl eframe::App for VibeDitherApp {
             KeyboardFocus::Dither => {
                 if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } if k_p { self.focus = KeyboardFocus::PosterizeMenu; }
                 if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
-                if k_c { self.focus = KeyboardFocus::ColorDitherMenu; } if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
+                if k_c && self.settings.dither_type != 1.0 { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; } 
+                if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
             }
             KeyboardFocus::ModeSelection => {
                 let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); }
                 if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
             }
             KeyboardFocus::PosterizeMenu => { if k_e { self.settings.posterize_levels = if self.settings.posterize_levels > 0.0 { 0.0 } else { 4.0 }; changed = true; } if self.settings.posterize_levels > 0.0 { self.focus = KeyboardFocus::Editing("posterize"); } }
-            KeyboardFocus::ColorDitherMenu => { if k_e { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; self.focus = KeyboardFocus::Dither; } }
             KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
             KeyboardFocus::GradientMapMenu => {
+                if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                 if k_left || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); } } } }
                 if k_right || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); } } } }
                 if space { self.focus = KeyboardFocus::GradientPointEdit; }
@@ -272,7 +273,7 @@ impl eframe::App for VibeDitherApp {
         egui::TopBottomPanel::top("top_shortcuts").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(format!("[{}]", match self.focus {
-                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::ColorDitherMenu => "COLOR DITHER", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING",
+                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING",
                 }));
                 ui.separator();
                 let shortcuts = match self.focus {
@@ -281,13 +282,12 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back",
-                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
                     KeyboardFocus::ModeSelection => "A:None S:Thresh D:Rand F:Bayer G:Blue H:Diff J:Stucki K:Atkin L:Grad C:Latt",
                     KeyboardFocus::PosterizeMenu => "E:Toggle  Esc:Back",
-                    KeyboardFocus::ColorDitherMenu => "E:Toggle  Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
-                    KeyboardFocus::GradientMapMenu => "A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
+                    KeyboardFocus::GradientMapMenu => "E:Toggle  A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
                     KeyboardFocus::GradientPointEdit => "R,T,Y/F,G,H:HSB +/-  A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
                 };
                 ui.label(shortcuts);
             });
