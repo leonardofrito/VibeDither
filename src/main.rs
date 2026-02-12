@@ -36,8 +36,42 @@ enum Tab {
 
 #[derive(Clone, Copy)]
 struct GradientStop {
+    id: u64,
     pos: f32,
     color: egui::Color32,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum ExportFormat {
+    Png,
+    Jpg,
+    Webp,
+}
+
+struct ExportSettings {
+    format: ExportFormat,
+    compression: f32, // 0.0 to 1.0
+    transparency: bool,
+    use_percentage: bool,
+    percentage: f32,
+    width_px: u32,
+    height_px: u32,
+    link_aspect: bool,
+}
+
+impl Default for ExportSettings {
+    fn default() -> Self {
+        Self {
+            format: ExportFormat::Png,
+            compression: 0.8,
+            transparency: true,
+            use_percentage: true,
+            percentage: 1.0,
+            width_px: 1920,
+            height_px: 1080,
+            link_aspect: true,
+        }
+    }
 }
 
 struct VibeDitherApp {
@@ -55,6 +89,8 @@ struct VibeDitherApp {
     curves_data: [u8; 1024], // 256 * 4 (RGBA)
     gradient_data: [u8; 1024], // 256 * 4 (RGBA)
     gradient_stops: Vec<GradientStop>,
+    selected_stop_id: Option<u64>,
+    next_stop_id: u64,
     curve_points: Vec<egui::Pos2>,
     dragging_point_idx: Option<usize>,
     // UI state
@@ -62,6 +98,9 @@ struct VibeDitherApp {
     // Zoom state
     zoom_factor: f32,
     fit_to_screen: bool,
+    // Export state
+    show_export_window: bool,
+    export_settings: ExportSettings,
 }
 
 impl VibeDitherApp {
@@ -91,8 +130,8 @@ impl VibeDitherApp {
         }
 
         let gradient_stops = vec![
-            GradientStop { pos: 0.0, color: egui::Color32::BLACK },
-            GradientStop { pos: 1.0, color: egui::Color32::WHITE },
+            GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK },
+            GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE },
         ];
         let mut gradient_data = [0u8; 1024];
         Self::generate_gradient_data(&gradient_stops, &mut gradient_data);
@@ -111,11 +150,15 @@ impl VibeDitherApp {
             curves_data,
             gradient_data,
             gradient_stops,
+            selected_stop_id: Some(0),
+            next_stop_id: 2,
             curve_points,
             dragging_point_idx: None,
             active_tab: Tab::Adjust,
             zoom_factor: 1.0,
             fit_to_screen: true,
+            show_export_window: false,
+            export_settings: ExportSettings::default(),
         }
     }
 
@@ -167,9 +210,11 @@ impl VibeDitherApp {
         }
 
         self.gradient_stops = vec![
-            GradientStop { pos: 0.0, color: egui::Color32::BLACK },
-            GradientStop { pos: 1.0, color: egui::Color32::WHITE },
+            GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK },
+            GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE },
         ];
+        self.selected_stop_id = Some(0);
+        self.next_stop_id = 2;
         Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
 
         if let Some(queue) = &self.queue {
@@ -193,7 +238,7 @@ impl VibeDitherApp {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.target_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -207,10 +252,111 @@ impl VibeDitherApp {
         self.pipeline.update_curves(queue, &self.curves_data);
         self.pipeline.update_gradient(queue, &self.gradient_data);
 
-        self.current_image = Some(img);
+        self.current_image = Some(img.clone());
+        self.export_settings.width_px = img.width();
+        self.export_settings.height_px = img.height();
         self.input_texture = Some(input_tex);
         self.output_texture = Some(output_tex);
         self.egui_texture_id = Some(tex_id);
+    }
+
+    fn export_image(&mut self) {
+        let (Some(device), Some(queue), Some(output_tex), Some(current_img)) = (&self.device, &self.queue, &self.output_texture, &self.current_image) else { return };
+        
+        let width = current_img.width();
+        let height = current_img.height();
+        
+        // 1. Staging buffer for readback
+        let bytes_per_pixel = 4;
+        let unpadded_bytes_per_row = width * bytes_per_pixel;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_bytes_per_row_padding = (align - unpadded_bytes_per_row % align) % align;
+        let padded_bytes_per_row = unpadded_bytes_per_row + padded_bytes_per_row_padding;
+
+        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("export_staging_buffer"),
+            size: (padded_bytes_per_row * height) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("export_encoder") });
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: output_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &staging_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+
+        queue.submit(Some(encoder.finish()));
+
+        // 2. Map buffer and read pixels
+        let buffer_slice = staging_buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+        device.poll(wgpu::Maintain::Wait);
+
+        if let Ok(Ok(())) = rx.recv() {
+            let data = buffer_slice.get_mapped_range();
+            let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+            for row in 0..height {
+                let start = (row * padded_bytes_per_row) as usize;
+                let end = start + (width * 4) as usize;
+                pixels.extend_from_slice(&data[start..end]);
+            }
+            drop(data);
+            staging_buffer.unmap();
+
+            // 3. Process with image crate
+            if let Some(img_buffer) = image::RgbaImage::from_raw(width, height, pixels) {
+                let mut dynamic_img = image::DynamicImage::ImageRgba8(img_buffer);
+                
+                // Resize if needed
+                if dynamic_img.width() != self.export_settings.width_px || dynamic_img.height() != self.export_settings.height_px {
+                    dynamic_img = dynamic_img.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
+                }
+
+                // Transparency handle
+                if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg {
+                    let rgb = dynamic_img.to_rgb8();
+                    dynamic_img = image::DynamicImage::ImageRgb8(rgb);
+                }
+
+                // 4. File dialog and save
+                let (ext, filter) = match self.export_settings.format {
+                    ExportFormat::Png => ("png", "Portable Network Graphics"),
+                    ExportFormat::Jpg => ("jpg", "JPEG"),
+                    ExportFormat::Webp => ("webp", "WebP"),
+                };
+
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter(filter, &[ext])
+                    .set_file_name(&format!("vibe_dither_export.{}", ext))
+                    .save_file() {
+                    
+                    let _quality = (self.export_settings.compression * 100.0) as u8;
+                    match self.export_settings.format {
+                        ExportFormat::Png => { dynamic_img.save(path).ok(); },
+                        ExportFormat::Jpg => {
+                            let mut file = std::fs::File::create(path).unwrap();
+                            dynamic_img.write_to(&mut file, image::ImageFormat::Jpeg).ok();
+                        },
+                        ExportFormat::Webp => { dynamic_img.save(path).ok(); },
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -251,6 +397,10 @@ impl eframe::App for VibeDitherApp {
                         if let Some(img) = image_io::get_clipboard_image() {
                             self.load_image_to_gpu(ctx, img);
                         }
+                    }
+
+                    if ui.button("Export Image").clicked() {
+                        self.show_export_window = true;
                     }
 
                     ui.separator();
@@ -503,38 +653,102 @@ impl eframe::App for VibeDitherApp {
                             ui.add_enabled_ui(grad_enabled, |ui| {
                                 let mut stops_changed = false;
                                 
+                                // --- Blender-style Gradient Ramp ---
                                 ui.vertical(|ui| {
-                                    let mut to_remove = None;
-                                    let stops_len = self.gradient_stops.len();
-                                    for (idx, stop) in self.gradient_stops.iter_mut().enumerate() {
-                                        ui.horizontal(|ui| {
-                                            if ui.color_edit_button_srgba(&mut stop.color).changed() {
-                                                stops_changed = true;
-                                            }
-                                            let mut pos = stop.pos;
-                                            if ui.add(egui::Slider::new(&mut pos, 0.0..=1.0).show_value(false)).changed() {
-                                                stop.pos = pos;
-                                                stops_changed = true;
-                                            }
-                                            if idx != 0 && idx != stops_len - 1 {
-                                                if ui.button("x").clicked() {
-                                                    to_remove = Some(idx);
+                                    let ramp_height = 20.0;
+                                    let (ramp_rect, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), ramp_height), egui::Sense::hover());
+                                    let _rect = ui.allocate_space(egui::vec2(ui.available_width(), 15.0)); // space for handles
+
+                                    // Draw the actual gradient in the bar
+                                    for i in 0..255 {
+                                        let t0 = i as f32 / 255.0;
+                                        let t1 = (i + 1) as f32 / 255.0;
+                                        let x0 = ramp_rect.left() + t0 * ramp_rect.width();
+                                        let x1 = ramp_rect.left() + t1 * ramp_rect.width();
+                                        
+                                        let c0 = egui::Color32::from_rgba_unmultiplied(
+                                            self.gradient_data[i * 4],
+                                            self.gradient_data[i * 4 + 1],
+                                            self.gradient_data[i * 4 + 2],
+                                            255
+                                        );
+                                        
+                                        let r = egui::Rect::from_min_max(egui::pos2(x0, ramp_rect.top()), egui::pos2(x1, ramp_rect.bottom()));
+                                        ui.painter().rect_filled(r, 0.0, c0);
+                                    }
+                                    ui.painter().rect_stroke(ramp_rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)));
+
+                                    // Draw markers (handles)
+                                    let mut active_id = self.selected_stop_id;
+                                    let mut dragged_id = None;
+                                    let mut new_pos_val = 0.0;
+
+                                    for stop in self.gradient_stops.iter() {
+                                        let x = ramp_rect.left() + stop.pos * ramp_rect.width();
+                                        let y = ramp_rect.bottom() + 2.0;
+                                        
+                                        let is_selected = Some(stop.id) == active_id;
+                                        let color = if is_selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(150, 150, 150) };
+                                        
+                                        // Draw triangle handle
+                                        let p1 = egui::pos2(x, y);
+                                        let p2 = egui::pos2(x - 5.0, y + 8.0);
+                                        let p3 = egui::pos2(x + 5.0, y + 8.0);
+                                        ui.painter().add(egui::Shape::convex_polygon(vec![p1, p2, p3], color, egui::Stroke::NONE));
+                                        
+                                        // Handle interaction
+                                        let handle_rect = egui::Rect::from_center_size(egui::pos2(x, y + 4.0), egui::vec2(10.0, 10.0));
+                                        let handle_res = ui.interact(handle_rect, egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
+                                        
+                                        if handle_res.clicked() {
+                                            active_id = Some(stop.id);
+                                        }
+                                        
+                                        if handle_res.dragged() {
+                                            active_id = Some(stop.id);
+                                            let delta_x = handle_res.drag_delta().x / ramp_rect.width();
+                                            new_pos_val = (stop.pos + delta_x).clamp(0.0, 1.0);
+                                            dragged_id = Some(stop.id);
+                                        }
+                                    }
+
+                                    if let Some(id) = dragged_id {
+                                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                                            stop.pos = new_pos_val;
+                                            stops_changed = true;
+                                        }
+                                    }
+                                    self.selected_stop_id = active_id;
+
+                                    // Bottom controls for the selected stop
+                                    ui.horizontal(|ui| {
+                                        if ui.button("+").on_hover_text("Add Stop").clicked() {
+                                            let new_id = self.next_stop_id;
+                                            self.next_stop_id += 1;
+                                            self.gradient_stops.push(GradientStop { id: new_id, pos: 0.5, color: egui::Color32::GRAY });
+                                            self.selected_stop_id = Some(new_id);
+                                            stops_changed = true;
+                                        }
+                                        
+                                        if let Some(id) = self.selected_stop_id {
+                                            if self.gradient_stops.len() > 2 {
+                                                if ui.button("-").on_hover_text("Remove Selected").clicked() {
+                                                    self.gradient_stops.retain(|s| s.id != id);
+                                                    self.selected_stop_id = self.gradient_stops.first().map(|s| s.id);
+                                                    stops_changed = true;
                                                 }
-                                            } else {
-                                                ui.add_enabled(false, egui::Button::new(" "));
                                             }
-                                        });
-                                    }
-                                    
-                                    if let Some(idx) = to_remove {
-                                        self.gradient_stops.remove(idx);
-                                        stops_changed = true;
-                                    }
-                                    
-                                    if ui.button("+ Add Stop").clicked() {
-                                        self.gradient_stops.push(GradientStop { pos: 0.5, color: egui::Color32::GRAY });
-                                        stops_changed = true;
-                                    }
+                                            
+                                            ui.separator();
+                                            
+                                            if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                                                if ui.color_edit_button_srgba(&mut stop.color).changed() {
+                                                    stops_changed = true;
+                                                }
+                                                ui.add(egui::DragValue::new(&mut stop.pos).speed(0.01).clamp_range(0.0..=1.0));
+                                            }
+                                        }
+                                    });
                                 });
 
                                 if stops_changed {
@@ -612,6 +826,95 @@ impl eframe::App for VibeDitherApp {
                 });
             }
         });
+
+        // --- Export Window ---
+        if self.show_export_window {
+            let mut close = false;
+            egui::Window::new("Export Settings")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("FORMAT");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
+                            ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
+                        });
+                        
+                        ui.separator();
+                        ui.label("SETTINGS");
+                        ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression"));
+                        ui.checkbox(&mut self.export_settings.transparency, "Enable Transparency");
+                        
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("SIZE");
+                            if ui.selectable_label(self.export_settings.use_percentage, "%").clicked() {
+                                self.export_settings.use_percentage = true;
+                            }
+                            if ui.selectable_label(!self.export_settings.use_percentage, "px").clicked() {
+                                self.export_settings.use_percentage = false;
+                            }
+                        });
+
+                        if self.export_settings.use_percentage {
+                            if ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale")).changed() {
+                                if let Some(img) = &self.current_image {
+                                    self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32;
+                                    self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32;
+                                }
+                            }
+                        } else {
+                            ui.horizontal(|ui| {
+                                let mut w = self.export_settings.width_px;
+                                let mut h = self.export_settings.height_px;
+                                
+                                if ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: ")).changed() {
+                                    if self.export_settings.link_aspect {
+                                        if let Some(img) = &self.current_image {
+                                            let ratio = img.height() as f32 / img.width() as f32;
+                                            h = (w as f32 * ratio) as u32;
+                                        }
+                                    }
+                                    self.export_settings.width_px = w;
+                                    self.export_settings.height_px = h;
+                                }
+                                
+                                let chain_icon = if self.export_settings.link_aspect { "🔗" } else { "🔓" };
+                                if ui.button(chain_icon).clicked() {
+                                    self.export_settings.link_aspect = !self.export_settings.link_aspect;
+                                }
+
+                                if ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: ")).changed() {
+                                    if self.export_settings.link_aspect {
+                                        if let Some(img) = &self.current_image {
+                                            let ratio = img.width() as f32 / img.height() as f32;
+                                            w = (h as f32 * ratio) as u32;
+                                        }
+                                    }
+                                    self.export_settings.width_px = w;
+                                    self.export_settings.height_px = h;
+                                }
+                            });
+                        }
+
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                close = true;
+                            }
+                            if ui.button("Export").clicked() {
+                                self.export_image();
+                                close = true;
+                            }
+                        });
+                    });
+                });
+            if close {
+                self.show_export_window = false;
+            }
+        }
     }
 }
 
