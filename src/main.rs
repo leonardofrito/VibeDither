@@ -4,7 +4,7 @@ mod spline;
 
 use eframe::{egui, egui_wgpu};
 use pipeline::{Pipeline, ColorSettings};
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, ImageEncoder};
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
@@ -99,7 +99,12 @@ impl VibeDitherApp {
         for i in 0..256 { self.curves_data[i * 4] = lut[i]; self.curves_data[i * 4 + 1] = lut[i]; self.curves_data[i * 4 + 2] = lut[i]; self.curves_data[i * 4 + 3] = 255; }
         self.gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
         self.selected_stop_id = Some(0); self.next_stop_id = 2; Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
-        if let Some(q) = &self.queue { self.pipeline.update_curves(q, &self.curves_data); self.pipeline.update_gradient(q, &self.gradient_data); }
+        if let (Some(q), Some(device)) = (&self.queue, &self.device) {
+            self.pipeline.update_curves(q, &self.curves_data); self.pipeline.update_gradient(q, &self.gradient_data);
+            if let (Some(input), Some(output)) = (&self.input_texture, &self.output_texture) {
+                self.pipeline.render(device, q, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
+            }
+        }
     }
 
     fn load_image_to_gpu(&mut self, _ctx: &egui::Context, img: DynamicImage) {
@@ -107,7 +112,6 @@ impl VibeDitherApp {
         let Some(device) = self.device.clone() else { return };
         let Some(queue) = self.queue.clone() else { return };
         let Some(renderer) = self.renderer.clone() else { return };
-        
         let input_tex = self.pipeline.create_texture_from_image(&device, &queue, &img);
         let output_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("output_texture"), size: input_tex.size(), mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: self.target_format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
         let tex_id = renderer.write().register_native_texture(&device, &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), wgpu::FilterMode::Nearest);
@@ -143,14 +147,15 @@ impl VibeDitherApp {
                 let d_idx = self.settings.dither_type as usize;
                 let d_name = d_names.get(d_idx).unwrap_or(&"Custom");
                 let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
-                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&format!("VibeDither_{}{}.{}", d_name, color_suffix, ext)).save_file() {
+                let default_name = format!("VibeDither_{}{}.{}", d_name, color_suffix, ext);
+                if let Some(path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&default_name).save_file() {
                     match self.export_settings.format {
                         ExportFormat::Png => {
                             let mut f = std::fs::File::create(&path).unwrap();
                             let level = if self.export_settings.compression > 0.8 { image::codecs::png::CompressionType::Best } else if self.export_settings.compression > 0.3 { image::codecs::png::CompressionType::Default } else { image::codecs::png::CompressionType::Fast };
                             let encoder = image::codecs::png::PngEncoder::new_with_quality(&mut f, level, image::codecs::png::FilterType::Adaptive);
                             let (w, h) = dimg.dimensions(); let color_type = dimg.color();
-                            encoder.encode(dimg.as_bytes(), w, h, color_type).ok();
+                            encoder.write_image(dimg.as_bytes(), w, h, color_type).ok();
                         },
                         ExportFormat::Jpg => {
                             let mut f = std::fs::File::create(&path).unwrap();
@@ -169,11 +174,12 @@ impl VibeDitherApp {
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
-            [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)]
+            [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)],
+            i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight)
         ));
 
         if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
@@ -192,7 +198,15 @@ impl eframe::App for VibeDitherApp {
         }
 
         match self.focus {
-            KeyboardFocus::Main => { if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
+            KeyboardFocus::Main => { 
+                if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; } 
+                if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } 
+                let pan_speed = if shift { 50.0 } else { 10.0 };
+                if k_up_d { self.pan_offset.y += pan_speed; }
+                if k_down_d { self.pan_offset.y -= pan_speed; }
+                if k_left_d { self.pan_offset.x += pan_speed; }
+                if k_right_d { self.pan_offset.x -= pan_speed; }
+            }
             KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
             KeyboardFocus::Light => { if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); } if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
             KeyboardFocus::Color => { if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); } if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
@@ -250,10 +264,10 @@ impl eframe::App for VibeDitherApp {
             }
             KeyboardFocus::Editing(id) => {
                 if space { self.focus = if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither }; }
-                let now = ctx.input(|i| i.time);
-                if now - self.last_edit_time > 0.166 {
-                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
-                    if delta != 0.0 {
+                let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                if delta != 0.0 {
+                    let now = ctx.input(|i| i.time);
+                    if now - self.last_edit_time > 0.166 {
                         let mut act_step = if shift { 0.1 } else { 0.05 };
                         if id == "exposure" { act_step = if shift { 0.15 } else { 0.05 }; }
                         if id == "scale" || id == "posterize" { act_step = 1.0; if shift { act_step = 2.0; } }
@@ -498,7 +512,7 @@ impl eframe::App for VibeDitherApp {
                                     }
                                 });
                             });
-                            if stops_ch || side_changed { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
+                            if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
                         });
                     },
                 }
