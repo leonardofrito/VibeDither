@@ -104,8 +104,10 @@ fn apply_dither_step(val: f32, noise: f32, levels: f32) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_size = vec2<f32>(textureDimensions(t_diffuse));
     var uv = in.tex_coords;
-    let scale = floor(max(1.0, settings.dither_scale));
+    let scale = settings.dither_scale;
     
+    // Only pixelate the image if scale is greater than 1.0
+    // This prevents "breaking" the image when trying to upscale sub-pixels
     if (settings.dither_enabled > 0.5 && scale > 1.0) {
         uv = (floor(uv * tex_size / scale) * scale + (scale * 0.5)) / tex_size;
     }
@@ -154,7 +156,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     } else {
         // If Dither is ON, posterize is handled WITHIN the dither step
-        let screen_pos = floor(in.tex_coords * tex_size / scale);
+        let d_scale = max(1.0, scale);
+        let screen_pos = floor(in.tex_coords * tex_size / d_scale);
         let d_type = i32(settings.dither_type);
         
         var noise = settings.dither_threshold;

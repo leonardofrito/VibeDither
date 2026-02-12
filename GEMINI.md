@@ -13,32 +13,33 @@
 1. **Core Pipeline:**
     - Non-destructive image processing.
     - Strict 16-byte uniform alignment for high-performance GPU updates.
-    - Fixed order: Basic Adjustments -> Posterization -> Dithering -> RGB Curves.
+    - Fixed order: Basic Adjustments -> Dithering (with internal Posterization) -> Gradient Remap.
 2. **Key UI Elements:**
     - Matrix Green terminal-inspired layout with monospace fonts.
-    - Left control panel with toggleable tabs (Adjust, Dither).
-    - Custom Spline-based RGB Curves editor.
-    - Real-time live preview with Zoom and Fit-to-Screen support.
+    - Tactical Keyboard-centric navigation (Hierarchical Menus).
+    - Centered "Oscilloscope" style editing overlay.
+    - Blender-style Color Ramp for Gradient Remap.
+    - Real-time live preview with Zoom (0-9 keys) and Pan (Arrow keys).
 3. **Current Features:**
-    - **Adjustments:** Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Temperature, Tint, Vibrance, Saturation, Sharpness, and Brightness.
-    - **Posterization:** Quantization applied before dithering for better transitions.
+    - **Adjustments:** Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Temperature, Tint, Vibrance, Saturation, Sharpness.
     - **Dithering:** 
-        - Threshold (with adjustable threshold).
-        - Random (White Noise).
-        - Bayer (Ordered) with selectable Matrix Sizes: 2x2, 3x3, 4x4, 8x8.
-        - Advanced modes: Blue Noise, Stucki, Atkinson, Gradient Based, Lattice-Boltzmann.
-        - Adjustable Pixel Scale (Resolution Scaling).
+        - Multi-level dither with integrated Posterization.
+        - Algorithms: Threshold, Random, Bayer (2x2 to 8x8), Blue Noise, Diffusion Approx, Stucki, Atkinson, Gradient Based, Lattice-Boltzmann.
+        - Color Dithering toggle for all modes (except Threshold).
+    - **Gradient Remap:** Multi-stop system with HSB editing support.
+    - **Export:** PNG, JPG, WebP with Quality/Compression control, Transparency toggle, and Resolution Scaling (Aspect ratio lock).
     - **I/O:** Drag & drop, Clipboard (Paste), and System File Picker.
 
-## Status: 2026-02-12
-- [x] Disable linear pixel filtering (Nearest Neighbor for dither clarity).
-- [x] Advanced Color Dithering (Blue Noise, Stucki, Atkinson, Gradient, Lattice-Boltzmann).
-- [x] Gradient Remap multi-stop system.
-- [x] Integrated Posterize as a multi-level dither effect.
-- [ ] Image Export (Save to file/Copy to clipboard).
+## Status: v0.3 (2026-02-12)
+- [x] Nearest Neighbor filtering for sharp dither clarity.
+- [x] Comprehensive Dithering suite (10 algorithms).
+- [x] Tactical Keyboard UI & Shortcuts.
+- [x] Blender-style Color Ramp (Gradient Remap).
+- [x] Robust Image Export system (Fixed gamma & encoders).
+- [ ] Support videos of all types.
 
 ## Recent Achievements
-- Switched GPU sampler to `Nearest` for sharp pixel art/dither aesthetic.
-- Implemented a wide range of dithering approximations optimized for GPU fragment shaders.
-- Created a robust 1D texture-based Gradient Remap system with a custom UI for managing color stops.
-- Moved Posterization to the Dither pipeline, allowing for sophisticated multi-level dither patterns.
+- Implemented a complete hierarchical keyboard control system for "tactic-feel" image editing.
+- Fixed sRGB export color space issues by applying manual gamma correction (2.4) during readback.
+- Added high-quality dither approximations optimized for GPU (Atkinson, Lattice-Boltzmann, etc.).
+- Created a robust export modal with AWSD keyboard navigation and grid focus.
