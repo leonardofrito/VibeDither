@@ -366,33 +366,9 @@ impl eframe::App for VibeDitherApp {
             }
         }
 
-        egui::TopBottomPanel::top("top_shortcuts").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("[{}]", match self.focus {
-                    KeyboardFocus::Main => "MAIN", KeyboardFocus::Adjust => "ADJUST", KeyboardFocus::Light => "ADJUST > LIGHT", KeyboardFocus::Color => "ADJUST > COLOR", KeyboardFocus::Dither => "DITHER", KeyboardFocus::ModeSelection => "SELECT MODE", KeyboardFocus::PosterizeMenu => "POSTERIZE", KeyboardFocus::BayerSizeMenu => "BAYER SIZE", KeyboardFocus::GradientMapMenu => "GRADIENT MAP", KeyboardFocus::GradientPointEdit => "EDIT POINT", KeyboardFocus::Editing(_) => "EDITING", KeyboardFocus::Export => "EXPORT",
-                }));
-                ui.separator();
-                let shortcuts = match self.focus {
-                    KeyboardFocus::Main => "A:Adjust  D:Dither  Ctrl+S:Export  Esc:Back  0-9:Zoom",
-                    KeyboardFocus::Adjust => "Q:Light  E:Color  Esc:Back",
-                    KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
-                    KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
-                    KeyboardFocus::Dither => "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back",
-                    KeyboardFocus::ModeSelection => "A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt V:Stip",
-                    KeyboardFocus::PosterizeMenu => "E:Toggle  Esc:Back",
-                    KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
-                    KeyboardFocus::GradientMapMenu => "E:Toggle  A/D:Navigate  Space:Edit  N:Add  B:Remove  Esc:Back",
-                    KeyboardFocus::GradientPointEdit => "R,T,Y/F,G,H:HSB +/-  A/D:Move  Shift:Fine  Space:Done",
-                    KeyboardFocus::Editing(_) => "ARROWS/WASD:Change  Shift:Fast  Space:OK",
-                    KeyboardFocus::Export => "AWSD:Navigate  Space:Toggle/Confirm  Esc:Back",
-                };
-                ui.label(shortcuts);
-            });
-        });
-
         if let KeyboardFocus::Editing(id) = self.focus {
             egui::Area::new(egui::Id::new("edit_overlay")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
-                let frame = egui::Frame::none().fill(egui::Color32::BLACK).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))).inner_margin(20.0);
+                let frame = egui::Frame::none().fill(egui::Color32::BLACK).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))).inner_margin(20.0);
                 frame.show(ui, |ui| {
                     let val = match id {
                         "exposure" => self.settings.exposure, "contrast" => self.settings.contrast, "highlights" => self.settings.highlights, "shadows" => self.settings.shadows, "whites" => self.settings.whites, "blacks" => self.settings.blacks, "sharpness" => self.settings.sharpness, "temperature" => self.settings.temperature, "tint" => self.settings.tint, "saturation" => self.settings.saturation, "vibrance" => self.settings.vibrance, "scale" => self.settings.dither_scale, "threshold" => self.settings.dither_threshold, "posterize" => self.settings.posterize_levels, _ => 0.0,
@@ -410,39 +386,34 @@ impl eframe::App for VibeDitherApp {
             } 
         });
 
-        egui::SidePanel::left("control_panel").resizable(true).default_width(300.0).show(ctx, |ui| {
-            ui.heading("VibeDither v0.3"); ui.separator();
+        egui::SidePanel::left("control_panel").resizable(true).default_width(320.0).frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(12.0)).show(ctx, |ui| {
+            ui.heading("VibeDither v0.9"); ui.add_space(8.0);
             ui.vertical(|ui| {
-                ui.label("CONTENT MANAGEMENT");
                 ui.horizontal(|ui| {
-                    if ui.button("📁 Load Content").clicked() { 
-                        log::debug!("'Load Content' button clicked.");
+                    if ui.button("[Load Image]").clicked() { 
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("All Supported", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"])
                             .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"])
                             .pick_file() { 
-                            log::debug!("File dialog returned path: {:?}", path);
                             self.load_content(ctx, path); 
-                        } else {
-                            log::debug!("File dialog cancelled or returned no path.");
                         }
                     }
-                    if ui.button("📋 Paste").clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); } }
+                    if ui.button("[Paste]").clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); } }
                 });
-                if ui.button("💾 Export Image").clicked() { self.show_export_window = true; self.focus = KeyboardFocus::Export; }
+                if ui.button("[Export Image]").clicked() { self.show_export_window = true; self.focus = KeyboardFocus::Export; }
                 
-                ui.separator();
+                ui.add_space(10.0);
                 ui.horizontal(|ui| { 
-                    ui.selectable_value(&mut self.active_tab, Tab::Adjust, "ADJUST"); 
-                    ui.selectable_value(&mut self.active_tab, Tab::Dither, "DITHER"); 
+                    ui.selectable_value(&mut self.active_tab, Tab::Adjust, "Adjust"); 
+                    ui.label("|");
+                    ui.selectable_value(&mut self.active_tab, Tab::Dither, "Dither"); 
                 });
-                ui.separator();
+                ui.add_space(8.0);
+
                 let mut side_changed = false;
                 match self.active_tab {
                     Tab::Adjust => {
-                        ui.label("BASIC ADJUSTMENTS");
-                        ui.group(|ui| {
-                            ui.label("Light");
+                        ui.label("------------ [ Light ] ------------"); ui.add_space(4.0);
+                        ui.vertical(|ui| {
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.exposure, -5.0..=5.0).text("Exposure")).changed();
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.contrast, 0.0..=2.0).text("Contrast")).changed();
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.highlights, -1.0..=1.0).text("Highlights")).changed();
@@ -450,27 +421,48 @@ impl eframe::App for VibeDitherApp {
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.whites, -1.0..=1.0).text("Whites")).changed();
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.blacks, -1.0..=1.0).text("Blacks")).changed();
                         });
-                        ui.group(|ui| {
-                            ui.label("Color");
+                        ui.add_space(4.0);
+                        if ui.button("[Reset]").clicked() { self.settings = ColorSettings::default(); side_changed = true; }
+
+                        ui.add_space(8.0);
+                        ui.label("------------ [ Color ] ------------"); ui.add_space(4.0);
+                        ui.vertical(|ui| {
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.temperature, -1.0..=1.0).text("Temperature")).changed();
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.tint, -1.0..=1.0).text("Tint")).changed();
-                            side_changed |= ui.add(egui::Slider::new(&mut self.settings.vibrance, -1.0..=1.0).text("Vibrance")).changed();
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.saturation, 0.0..=2.0).text("Saturation")).changed();
+                            side_changed |= ui.add(egui::Slider::new(&mut self.settings.vibrance, -1.0..=1.0).text("Vibrance")).changed();
+                            side_changed |= ui.add(egui::Slider::new(&mut self.settings.sharpness, 0.0..=2.0).text("Sharpness")).changed();
                         });
-                        ui.group(|ui| { ui.label("Detail"); side_changed |= ui.add(egui::Slider::new(&mut self.settings.sharpness, 0.0..=2.0).text("Sharpness")).changed(); });
-                        if ui.button("Reset Adjustments").clicked() { self.settings = ColorSettings::default(); side_changed = true; }
-                        ui.separator(); ui.label("RGB CURVES");
+                        ui.add_space(4.0);
+                        if ui.button("[Reset]").clicked() { self.settings = ColorSettings::default(); side_changed = true; }
+                        
+                        ui.add_space(8.0);
+                        ui.label("------------ [ Curves ] -----------"); ui.add_space(4.0);
                         let mut curves_changed = false;
                         ui.vertical(|ui| {
-                            let size = egui::vec2(ui.available_width(), 150.0);
+                            ui.label("┌─ A ─ R ─ G ─ B ─────────────────┐");
+                            let size = egui::vec2(ui.available_width(), 160.0);
                             let (rect, response) = ui.allocate_at_least(size, egui::Sense::click_and_drag());
-                            ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(15, 15, 15));
-                            ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(40, 40, 40)));
-                            for i in 1..4 { let x = rect.left() + rect.width() * (i as f32 / 4.0); let y = rect.top() + rect.height() * (i as f32 / 4.0); ui.painter().line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 30))); ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(0.5, egui::Color32::from_rgb(30, 30, 30))); }
+                            ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                            
+                            // 4x4 grid
+                            for i in 1..4 {
+                                let x = rect.left() + rect.width() * (i as f32 / 4.0);
+                                let y = rect.top() + rect.height() * (i as f32 / 4.0);
+                                ui.painter().line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(0, 255, 0, 40)));
+                                ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(0, 255, 0, 40)));
+                            }
+
                             let lut = spline::interpolate_spline(&self.curve_points);
                             let mut points: Vec<egui::Pos2> = Vec::new();
-                            for i in 0..256 { let val = lut[i]; let x = rect.left() + (i as f32 / 255.0) * rect.width(); let y = rect.bottom() - (val as f32 / 255.0) * rect.height(); points.push(egui::pos2(x, y)); }
-                            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 255, 65))));
+                            for i in 0..256 {
+                                let val = lut[i];
+                                let x = rect.left() + (i as f32 / 255.0) * rect.width();
+                                let y = rect.bottom() - (val as f32 / 255.0) * rect.height();
+                                points.push(egui::pos2(x, y));
+                            }
+                            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 255, 0))));
+
                             if let Some(pos) = response.interact_pointer_pos() {
                                 let x_norm = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
                                 let y_norm = ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0);
@@ -501,7 +493,8 @@ impl eframe::App for VibeDitherApp {
                                 }
                             }
                             for p in &self.curve_points { let px = rect.left() + p.x * rect.width(); let py = rect.bottom() - p.y * rect.height(); ui.painter().circle_filled(egui::pos2(px, py), 3.0, egui::Color32::WHITE); }
-                            if ui.button("Reset Curves").clicked() { self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)]; curves_changed = true; }
+                            ui.label("└─────────────────────────────────┘");
+                            if ui.button("[Reset Curves]").clicked() { self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)]; curves_changed = true; }
                         });
                         if curves_changed {
                             let lut = spline::interpolate_spline(&self.curve_points);
@@ -511,60 +504,97 @@ impl eframe::App for VibeDitherApp {
                         }
                     },
                     Tab::Dither => {
-                        ui.label("DITHERING CONTROLS");
                         let d_type = self.settings.dither_type as usize;
-                        let d_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "LatticeBoltzmann", "Stippling"];
-                        egui::ComboBox::from_label("Algorithm").selected_text(d_names[d_type.min(d_names.len() - 1)]).show_ui(ui, |ui| {
-                            for (i, name) in d_names.iter().enumerate() { if ui.selectable_label(d_type == i, *name).clicked() { self.settings.dither_type = i as f32; self.settings.dither_enabled = if i > 0 { 1.0 } else { 0.0 }; self.settings.dither_color = 0.0; side_changed = true; } }
+                        let d_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "Lattice Boltzmann", "Stippling"];
+                        
+                        ui.label("Dithering Algorithm [↓]");
+                        egui::ComboBox::from_id_source("algo_combo").selected_text(format!("└ {}", d_names[d_type.min(d_names.len() - 1)])).show_ui(ui, |ui| {
+                            for (i, name) in d_names.iter().enumerate() { if ui.selectable_label(d_type == i, *name).clicked() { self.settings.dither_type = i as f32; self.settings.dither_enabled = if i > 0 { 1.0 } else { 0.0 }; side_changed = true; } }
                         });
+                        ui.add_space(8.0);
+
                         ui.add_enabled_ui(d_type > 0, |ui| {
                             let mut scale_int = self.settings.dither_scale as i32; if ui.add(egui::Slider::new(&mut scale_int, 1..=32).text("Pixel Scale")).changed() { self.settings.dither_scale = scale_int as f32; side_changed = true; }
-                            if d_type == 1 { side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold")).changed(); }
-                            ui.group(|ui| {
-                                ui.label("Posterize");
-                                let mut use_p = self.settings.posterize_levels > 0.0;
-                                if ui.checkbox(&mut use_p, "Enabled").changed() { self.settings.posterize_levels = if use_p { 4.0 } else { 0.0 }; side_changed = true; }
-                                ui.add_enabled_ui(use_p, |ui| { side_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 2.0..=64.0).text("Levels")).changed(); });
-                            });
-                            if d_type == 3 || d_type == 10 { ui.horizontal(|ui| { ui.label("Matrix/Dot Size:"); let sizes = [2, 3, 4, 8]; for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } } }); }
-                            if d_type >= 1 { let mut color_d = self.settings.dither_color > 0.5; if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; } }
-                        });
-                        ui.separator(); ui.label("GRADIENT REMAP");
-                        let mut grad_e = self.settings.grad_enabled > 0.5;
-                        if ui.checkbox(&mut grad_e, "Enable Gradient Remap").changed() { self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; side_changed = true; }
-                        ui.add_enabled_ui(grad_e, |ui| {
-                            let mut stops_ch = false;
-                            ui.vertical(|ui| {
-                                let ramp_h = 20.0; let (ramp_r, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), ramp_h), egui::Sense::hover()); let _rect = ui.allocate_space(egui::vec2(ui.available_width(), 15.0));
-                                for i in 0..255 {
-                                    let t0 = i as f32 / 255.0; let t1 = (i + 1) as f32 / 255.0; let x0 = ramp_r.left() + t0 * ramp_r.width(); let x1 = ramp_r.left() + t1 * ramp_r.width();
-                                    let c0 = egui::Color32::from_rgba_unmultiplied(self.gradient_data[i * 4], self.gradient_data[i * 4 + 1], self.gradient_data[i * 4 + 2], 255);
-                                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, ramp_r.top()), egui::pos2(x1, ramp_r.bottom())), 0.0, c0);
-                                }
-                                ui.painter().rect_stroke(ramp_r, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)));
-                                let mut active_id = self.selected_stop_id; let mut dragged_id = None; let mut new_p_val = 0.0;
-                                for stop in self.gradient_stops.iter() {
-                                    let x = ramp_r.left() + stop.pos * ramp_r.width(); let y = ramp_r.bottom() + 2.0; let is_sel = Some(stop.id) == active_id; let color = if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgb(150, 150, 150) };
-                                    ui.painter().add(egui::Shape::convex_polygon(vec![egui::pos2(x, y), egui::pos2(x - 5.0, y + 8.0), egui::pos2(x + 5.0, y + 8.0)], color, egui::Stroke::NONE));
-                                    let h_res = ui.interact(egui::Rect::from_center_size(egui::pos2(x, y + 4.0), egui::vec2(10.0, 10.0)), egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
-                                    if h_res.clicked() { active_id = Some(stop.id); }
-                                    if h_res.dragged() { active_id = Some(stop.id); new_p_val = (stop.pos + h_res.drag_delta().x / ramp_r.width()).clamp(0.0, 1.0); dragged_id = Some(stop.id); }
-                                }
-                                if let Some(id) = dragged_id { if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { stop.pos = new_p_val; stops_ch = true; } }
-                                self.selected_stop_id = active_id;
-                                ui.horizontal(|ui| {
-                                    if ui.button("+").clicked() { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); stops_ch = true; }
+                            
+                            let thresh_label = if d_type == 10 { "Dot Softness" } else { "Threshold" };
+                            side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text(thresh_label)).changed();
+                            
+                            let mut color_d = self.settings.dither_color > 0.5;
+                            if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; }
+
+                            ui.add_space(6.0);
+                            ui.label("---------- [ Posterize ] ----------");
+                            let mut use_p = self.settings.posterize_levels > 0.0;
+                            if ui.checkbox(&mut use_p, "Enable").changed() { self.settings.posterize_levels = if use_p { 4.0 } else { 0.0 }; side_changed = true; }
+                            ui.add_enabled_ui(use_p, |ui| { side_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 2.0..=64.0).text("Levels")).changed(); });
+                            ui.label("-----------------------------------");
+                            
+                            ui.add_space(10.0);
+                            let mut grad_e = self.settings.grad_enabled > 0.5;
+                            if ui.checkbox(&mut grad_e, "Gradient Remap").changed() { self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; side_changed = true; }
+                            
+                            ui.add_enabled_ui(grad_e, |ui| {
+                                let mut stops_ch = false;
+                                ui.vertical(|ui| {
+                                    let (ramp_r, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
+                                    for i in 0..255 {
+                                        let x0 = ramp_r.left() + (i as f32 / 255.0) * ramp_r.width();
+                                        let x1 = ramp_r.left() + ((i + 1) as f32 / 255.0) * ramp_r.width();
+                                        let c = egui::Color32::from_rgba_unmultiplied(self.gradient_data[i * 4], self.gradient_data[i * 4 + 1], self.gradient_data[i * 4 + 2], 255);
+                                        ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, ramp_r.top()), egui::pos2(x1, ramp_r.bottom())), 0.0, c);
+                                    }
+                                    ui.painter().rect_stroke(ramp_r, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                                    
+                                    let mut active_id = self.selected_stop_id;
+                                    let mut dragged_id = None; let mut new_pos = 0.0;
+                                    for stop in &self.gradient_stops {
+                                        let x = ramp_r.left() + stop.pos * ramp_r.width();
+                                        let is_sel = Some(stop.id) == active_id;
+                                        ui.painter().line_segment([egui::pos2(x, ramp_r.top()), egui::pos2(x, ramp_r.bottom())], egui::Stroke::new(2.0, if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgba_unmultiplied(0, 255, 0, 180) }));
+                                        let h_res = ui.interact(egui::Rect::from_center_size(egui::pos2(x, ramp_r.center().y), egui::vec2(8.0, 20.0)), egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
+                                        if h_res.clicked() { active_id = Some(stop.id); }
+                                        if h_res.dragged() { active_id = Some(stop.id); new_pos = (stop.pos + h_res.drag_delta().x / ramp_r.width()).clamp(0.0, 1.0); dragged_id = Some(stop.id); }
+                                    }
+                                    if let Some(id) = dragged_id { if let Some(s) = self.gradient_stops.iter_mut().find(|s| s.id == id) { s.pos = new_pos; stops_ch = true; } }
+                                    self.selected_stop_id = active_id;
+
+                                    ui.horizontal(|ui| {
+                                        if ui.button("[ + ]").clicked() { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); stops_ch = true; }
+                                        if ui.button("[ - ]").clicked() { if let Some(id) = self.selected_stop_id { if self.gradient_stops.len() > 2 { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); stops_ch = true; } } }
+                                        ui.label("|");
+                                        if let Some(id) = self.selected_stop_id {
+                                            if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                                                ui.color_edit_button_srgba(&mut stop.color);
+                                                ui.label(format!("[{:.4}]", stop.pos));
+                                            }
+                                        }
+                                    });
                                     if let Some(id) = self.selected_stop_id {
-                                        if self.gradient_stops.len() > 2 { if ui.button("-").clicked() { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); stops_ch = true; } }
-                                        ui.separator();
-                                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) { if ui.color_edit_button_srgba(&mut stop.color).changed() { stops_ch = true; } ui.add(egui::DragValue::new(&mut stop.pos).speed(0.01).clamp_range(0.0..=1.0)); }
+                                        if let Some(stop) = self.gradient_stops.iter().find(|s| s.id == id) {
+                                            ui.add_space(4.0);
+                                            ui.label(format!("[ Copy ]  R [{}] G [{}] B [{}]", stop.color.r(), stop.color.g(), stop.color.b()));
+                                        }
                                     }
                                 });
+                                if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
                             });
-                            if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
+                            
+                            if d_type == 3 || d_type == 10 { 
+                                ui.add_space(8.0);
+                                ui.label(if d_type == 10 { "Dot Spacing:" } else { "Matrix Size:" }); 
+                                if d_type == 10 {
+                                    side_changed |= ui.add(egui::Slider::new(&mut self.settings.bayer_size, 1.0..=32.0).text("")).changed();
+                                } else {
+                                    ui.horizontal(|ui| {
+                                        let sizes = [2, 3, 4, 8]; 
+                                        for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } }
+                                    });
+                                }
+                            }
                         });
                     },
                 }
+
                 if side_changed || changed {
                     if let (Some(device), Some(queue), Some(input), Some(output)) = (&self.device, &self.queue, &self.input_texture, &self.output_texture) {
                         self.pipeline.render(device, queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
@@ -573,19 +603,29 @@ impl eframe::App for VibeDitherApp {
             });
         });
 
-        egui::TopBottomPanel::bottom("zoom_bar").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("footer").frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(8.0)).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(format!("Zoom: {:.0}%", self.zoom_factor * 100.0));
-                egui::ComboBox::from_id_source("zoom_selector").selected_text(format!("{:.0}%", self.zoom_factor * 100.0)).show_ui(ui, |ui| {
-                    let zooms = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
-                    for z in zooms { if ui.selectable_value(&mut self.zoom_factor, z, format!("{:.0}%", z * 100.0)).clicked() { self.fit_to_screen = false; } }
+                let shortcut_text = match self.focus {
+                    KeyboardFocus::Main => "1 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "2 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::Editing(_) => "3 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
+                    KeyboardFocus::ModeSelection => "1 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt V:Stip",
+                    _ => "4 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                };
+                ui.label(shortcut_text);
+                
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("― [] X");
+                    ui.separator();
+                    ui.label(format!("Zoom [{:.0}%]", self.zoom_factor * 100.0));
+                    if ui.button("[Fit]").clicked() { self.fit_to_screen = true; }
+                    if ui.button("[100%]").clicked() { self.zoom_factor = 1.0; self.fit_to_screen = false; }
+                    ui.label("|");
                 });
-                if ui.button("100%").clicked() { self.zoom_factor = 1.0; self.fit_to_screen = true; }
-                if ui.button("Fit to Screen").clicked() { self.fit_to_screen = true; }
             });
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::none().fill(egui::Color32::BLACK)).show(ctx, |ui| {
             if let Some(tex_id) = self.egui_texture_id {
                 let img_size = self.current_image.as_ref().map(|img| egui::vec2(img.width() as f32, img.height() as f32)).unwrap_or(egui::Vec2::ZERO);
                 let (rect, resp) = ui.allocate_at_least(ui.available_size(), egui::Sense::click_and_drag());
@@ -602,9 +642,7 @@ impl eframe::App for VibeDitherApp {
 
         if self.show_export_window {
             let mut close = false;
-            let mut export_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO);
             egui::Window::new("Export Settings").collapsible(false).resizable(false).show(ctx, |ui| {
-                export_rect = ui.max_rect();
                 ui.vertical(|ui| {
                     ui.label("FORMAT");
                     ui.horizontal(|ui| { 
@@ -613,19 +651,19 @@ impl eframe::App for VibeDitherApp {
                         let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
                         if self.focus == KeyboardFocus::Export && self.export_row == 0 {
                             let r = match self.export_col { 0 => png_btn.rect, 1 => jpg_btn.rect, _ => webp_btn.rect };
-                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
                         }
                     });
                     ui.separator(); ui.label("SETTINGS");
                     if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp { 
                         let q_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality"));
-                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(q_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(q_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     } else {
                         let c_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)"));
-                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(c_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                        if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(c_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     }
                     let t_check = ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
-                    if self.focus == KeyboardFocus::Export && self.export_row == 2 { ui.painter().rect_stroke(t_check.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                    if self.focus == KeyboardFocus::Export && self.export_row == 2 { ui.painter().rect_stroke(t_check.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     
                     ui.separator(); ui.horizontal(|ui| { 
                         ui.label("SIZE"); 
@@ -633,12 +671,12 @@ impl eframe::App for VibeDitherApp {
                         let px_btn = ui.selectable_label(!self.export_settings.use_percentage, "px");
                         if self.focus == KeyboardFocus::Export && self.export_row == 3 {
                             let r = if self.export_col == 0 { p_btn.rect } else { px_btn.rect };
-                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
                         }
                     });
                     if self.export_settings.use_percentage { 
                         let s_slider = ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale"));
-                        if self.focus == KeyboardFocus::Export && self.export_row == 4 { ui.painter().rect_stroke(s_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65))); }
+                        if self.focus == KeyboardFocus::Export && self.export_row == 4 { ui.painter().rect_stroke(s_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     } else {
                         ui.horizontal(|ui| {
                             let mut w = self.export_settings.width_px; let mut h = self.export_settings.height_px;
@@ -647,7 +685,7 @@ impl eframe::App for VibeDitherApp {
                             let h_drag = ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: "));
                             if self.focus == KeyboardFocus::Export && self.export_row == 4 {
                                 let r = match self.export_col { 0 => w_drag.rect, 1 => link_btn.rect, _ => h_drag.rect };
-                                ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                                ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
                             }
                             self.export_settings.width_px = w; self.export_settings.height_px = h;
                         });
@@ -658,7 +696,7 @@ impl eframe::App for VibeDitherApp {
                         let e_btn = ui.button("Export"); 
                         if self.focus == KeyboardFocus::Export && self.export_row == 5 {
                             let r = if self.export_col == 0 { c_btn.rect } else { e_btn.rect };
-                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 65)));
+                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
                         }
                         if c_btn.clicked() { close = true; } if e_btn.clicked() { self.export_image(); close = true; } 
                     });
@@ -671,21 +709,35 @@ impl eframe::App for VibeDitherApp {
 
 fn setup_custom_style(ctx: &egui::Context) {
     let mut style: egui::Style = (*ctx.style()).clone();
-    let matrix_green = egui::Color32::from_rgb(0, 255, 65);
-    let black = egui::Color32::from_rgb(10, 10, 10);
+    let matrix_green = egui::Color32::from_rgb(0, 255, 0);
+    let black = egui::Color32::from_rgb(0, 0, 0);
+    
     style.visuals.dark_mode = true;
     style.visuals.override_text_color = Some(matrix_green);
+    style.visuals.window_fill = black;
+    style.visuals.panel_fill = black;
+    
     style.visuals.widgets.noninteractive.bg_fill = black;
     style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
+    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, matrix_green);
+    
     style.visuals.widgets.inactive.bg_fill = black;
     style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(20, 20, 20);
+    style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+    
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(0, 40, 0);
     style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, matrix_green);
+    style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+    
     style.visuals.widgets.active.bg_fill = matrix_green;
     style.visuals.widgets.active.fg_stroke = egui::Stroke::new(2.0, black);
+    style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
+    
     style.visuals.selection.bg_fill = matrix_green.linear_multiply(0.3);
+    
     for text_style in [egui::TextStyle::Body, egui::TextStyle::Monospace, egui::TextStyle::Button, egui::TextStyle::Heading, egui::TextStyle::Small] {
-        style.text_styles.insert(text_style, egui::FontId::monospace(14.0));
+        style.text_styles.insert(text_style, egui::FontId::new(14.0, egui::FontFamily::Monospace));
     }
+    
     ctx.set_style(style);
 }
