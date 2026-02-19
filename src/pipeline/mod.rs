@@ -30,6 +30,11 @@ pub struct ColorSettings {
     pub posterize_levels: f32,
     pub bayer_size: f32, // 2 to 8
     pub grad_enabled: f32,
+    // Block 6: Stipple & Padding
+    pub stipple_min_size: f32,
+    pub stipple_max_size: f32,
+    pub padding1: f32,
+    pub padding2: f32,
 }
 
 impl Default for ColorSettings {
@@ -55,6 +60,10 @@ impl Default for ColorSettings {
             posterize_levels: 0.0,
             bayer_size: 8.0,
             grad_enabled: 0.0,
+            stipple_min_size: 0.0,
+            stipple_max_size: 1.0,
+            padding1: 0.0,
+            padding2: 0.0,
         }
     }
 }

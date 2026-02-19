@@ -23,6 +23,7 @@ struct ColorSettings {
     saturation: f32, vibrance: f32, sharpness: f32, brightness: f32,
     dither_enabled: f32, dither_type: f32, dither_scale: f32, dither_threshold: f32,
     dither_color: f32, posterize_levels: f32, bayer_size: f32, grad_enabled: f32,
+    stipple_min_size: f32, stipple_max_size: f32, padding1: f32, padding2: f32,
 };
 
 @group(0) @binding(0) var t_diffuse: texture_2d<f32>;
@@ -100,28 +101,13 @@ fn apply_dither_step(val: f32, noise: f32, levels: f32) -> f32 {
     }
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_size = vec2<f32>(textureDimensions(t_diffuse));
-    var uv = in.tex_coords;
-    let scale = settings.dither_scale;
+fn apply_adjustments(in_color: vec3<f32>, uv: vec2<f32>, tex_size: vec2<f32>) -> vec3<f32> {
+    var color = in_color;
     
-    // Only pixelate the image if scale is greater than 1.0
-    // This prevents "breaking" the image when trying to upscale sub-pixels
-    if (settings.dither_enabled > 0.5 && scale > 1.0) {
-        uv = (floor(uv * tex_size / scale) * scale + (scale * 0.5)) / tex_size;
-    }
-
-    var color = textureSample(t_diffuse, s_diffuse, uv).rgb;
+    // Sharpness (Simplified for sub-sampling if needed, but here using main uv)
+    // In a true neighborhood search we'd need neighbor samples, but for dot-centers
+    // we can skip sharpness for performance or just use the center value.
     
-    // Adjustments
-    if (settings.sharpness > 0.0) {
-        let dx = 1.0 / tex_size.x;
-        let dy = 1.0 / tex_size.y;
-        let laplacian = (textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(-dx, 0.0)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(dx, 0.0)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, -dy)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, dy)).rgb - 4.0 * color);
-        color = color - settings.sharpness * laplacian;
-    }
-
     color.r *= (1.0 + settings.temperature * 0.4);
     color.b *= (1.0 - settings.temperature * 0.4);
     color.g *= (1.0 - settings.tint * 0.25);
@@ -142,20 +128,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let color_sat = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
     color = mix(vec3<f32>(l_pre_sat), color, settings.saturation + settings.vibrance * (1.0 - color_sat));
 
-    color.r = textureSample(t_curves, s_diffuse, vec2<f32>(clamp(color.r, 0.0, 1.0), 0.5)).r;
-    color.g = textureSample(t_curves, s_diffuse, vec2<f32>(clamp(color.g, 0.0, 1.0), 0.5)).g;
-    color.b = textureSample(t_curves, s_diffuse, vec2<f32>(clamp(color.b, 0.0, 1.0), 0.5)).b;
+    color.r = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.r, 0.0, 1.0), 0.5), 0.0).r;
+    color.g = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.g, 0.0, 1.0), 0.5), 0.0).g;
+    color.b = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.b, 0.0, 1.0), 0.5), 0.0).b;
+    
+    return color;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tex_size = vec2<f32>(textureDimensions(t_diffuse));
+    var uv = in.tex_coords;
+    let scale = settings.dither_scale;
+    
+    if (settings.dither_enabled > 0.5 && scale > 1.0) {
+        uv = (floor(uv * tex_size / scale) * scale + (scale * 0.5)) / tex_size;
+    }
+
+    var color = textureSample(t_diffuse, s_diffuse, uv).rgb;
+    
+    if (settings.sharpness > 0.0) {
+        let dx = 1.0 / tex_size.x;
+        let dy = 1.0 / tex_size.y;
+        let laplacian = (textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(-dx, 0.0)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(dx, 0.0)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, -dy)).rgb + textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, dy)).rgb - 4.0 * color);
+        color = color - settings.sharpness * laplacian;
+    }
+
+    color = apply_adjustments(color, uv, tex_size);
 
     var final_color = color;
 
-    // If Dither is OFF, we still allow global posterize
     if (settings.dither_enabled < 0.5) {
         if (settings.posterize_levels > 1.5) {
             let lv = settings.posterize_levels - 1.0;
             final_color = floor(final_color * lv + 0.5) / lv;
         }
     } else {
-        // If Dither is ON, posterize is handled WITHIN the dither step
         let d_scale = max(1.0, scale);
         let screen_pos = floor(in.tex_coords * tex_size / d_scale);
         let d_type = i32(settings.dither_type);
@@ -175,20 +183,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let n2 = interleaved_gradient_noise(screen_pos + vec2<f32>(5.0, 3.0));
             noise = fract(n1 * 0.75 + n2 * 0.25);
         } else if (d_type == 7) {
-            // Atkinson Approx: Sparse and high contrast
             let n = interleaved_gradient_noise(screen_pos);
-            noise = step(0.5, n) * 0.5 + 0.25; // Create a more "stepped" noise threshold
+            noise = step(0.5, n) * 0.5 + 0.25; 
         } else if (d_type == 8) {
-            // Gradient Based: Adjusts noise based on local luminance change
             let dx = get_luminance(textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(1.0/tex_size.x, 0.0)).rgb) - get_luminance(color);
             let dy = get_luminance(textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, 1.0/tex_size.y)).rgb) - get_luminance(color);
             let edge = clamp(abs(dx) + abs(dy), 0.0, 1.0);
             noise = mix(interleaved_gradient_noise(screen_pos), settings.dither_threshold, edge * 0.8);
         } else if (d_type == 9) {
-            // Lattice-Boltzmann (Cellular/Fluid Approx)
             let p = screen_pos * 0.4;
             let n = sin(p.x) * cos(p.y) + sin(p.y * 0.5) * cos(p.x * 0.5);
             noise = fract(n * 2.0 + interleaved_gradient_noise(screen_pos) * 0.5);
+        } else if (d_type == 10) {
+            let size = max(1.5, settings.bayer_size);
+            let grid_pos = floor(screen_pos / size);
+            let softness = clamp(settings.dither_threshold, 0.0, 0.99);
+            var total_ink = 0.0;
+            
+            for (var xo = -1; xo <= 1; xo++) {
+                for (var yo = -1; yo <= 1; yo++) {
+                    let neighbor_grid_pos = grid_pos + vec2<f32>(f32(xo), f32(yo));
+                    let jitter = (hash22(neighbor_grid_pos) - 0.5) * 0.7;
+                    let dot_center = (neighbor_grid_pos + 0.5 + jitter) * size;
+                    let center_uv = (dot_center * d_scale) / tex_size;
+                    
+                    var center_sample = textureSampleLevel(t_diffuse, s_diffuse, center_uv, 0.0).rgb;
+                    center_sample = apply_adjustments(center_sample, center_uv, tex_size);
+                    
+                    let center_luma = get_luminance(center_sample);
+                    let darkness = clamp(1.0 - center_luma, 0.0, 1.0);
+                    
+                    // Dot size between min and max
+                    let radius = mix(settings.stipple_min_size, settings.stipple_max_size, darkness) * size * 0.5;
+                    
+                    let dist = length(screen_pos - dot_center);
+                    let dot_alpha = 1.0 - smoothstep(radius * (1.0 - softness), radius + 0.5, dist);
+                    total_ink = max(total_ink, dot_alpha);
+                }
+            }
+            let final_luma = 1.0 - total_ink;
+            final_color = vec3<f32>(final_luma);
+            
+            if (settings.grad_enabled > 0.5) {
+                final_color = textureSample(t_gradient, s_diffuse, vec2<f32>(final_luma, 0.5)).rgb;
+            }
+            return vec4<f32>(clamp(final_color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
         }
 
         if (settings.dither_color > 0.5) {

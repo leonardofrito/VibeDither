@@ -1,0 +1,149 @@
+--- Foot ---
+
+1 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Random F:Bayer G:Blue H: Diff  J:Stuck K:Atkin L:Grad C:Latt V:Stip       ―  []  X
+2 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done  Esc:Back                             ―  []  X
+3 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok  Esc:Back                                         ―  []  X
+4 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither                                                             ―  []  X
+
+--- Body ---
+
+1 VibeDither V0.9
+
+[Load Image] [Paste]
+[Export Image]
+
+Adjust | Dither
+
+Dithering Algorithm [↓]
+└ Gradient Based
+ ┌ None
+ ├ Threshold
+ ├ Random
+ ├ Bayer
+ ├ Blue Noise
+ ├ Diffusion Approx
+ ├ Stucki
+ ├ Atkinson
+ ├ .Gradient Based
+ ├ Lattice Boltzman
+ └ Stippling
+
+2 VibeDither V0.9
+
+[Load Image] [Paste]
+[Export Image]
+
+Adjust | Dither
+
+Dithering Algorithm [↓]
+└ Gradient Based
+
+Pixel Scale [<.>............] [ 1 ]
+Threshold   [......<.>......] [0.5]
+Color Dithering               [✓]
+
+---------- [ Posterize ] ----------
+Enable                        [✓]
+Levels      [.<.>...........] [5.0]
+-----------------------------------
+
+Gradient Remap                [✓]
+[⣿.............⣿.................█]
+[ + ] [ - ]   |   [     ]  [0.4542]
+
+[ Copy ]    R [255] G [170] B [237]
+
+┌─────────────────────────────────┐
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│         HSB                     │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+│                                 │
+└─────────────────────────────────┘
+
+3 VibeDither V0.9
+
+[Load Image] [Paste]
+[Export Image]
+
+Adjust | Dither
+
+------------ [ Light ] ------------
+
+Exposure    [......<█>......] [0.0]
+Contrast    [......<.>......] [1.0]
+Highlihgts  [......<.>......] [0.0]
+Shadows     [......<.>......] [0.0]
+Whites      [......<.>......] [0.0]
+Blacks      [......<.>......] [0.0]
+
+[Reset]
+
+------------ [ Color ] ------------
+
+Temperature [......<.>......] [0.0]
+Tint        [......<.>......] [0.0]
+Saturation  [......<.>......] [1.0]
+Vibrance    [......<.>......] [0.0]
+Sharpness   [......<.>......] [0.0]
+
+[Reset]
+
+------------ [ Curves ] -----------
+
+┌─ A ─ R ─ G ─ B ─────────────────┐
+│                               ● │
+│                             /   │
+│                            /    │
+│                           /     │
+│                         /       │
+│                       ●         │
+│                 _  ⎯┘           │
+│              _ ┘                │
+│            [●]                  │
+│           /                     │
+│          ׀                      │
+│         ●                       │
+│       /                         │
+│     /                           │
+│   /                             │
+│ ●                               │
+└─────────────────────────────────┘
+
+4 VibeDither V0.9
+
+[Load Image] [Paste]
+[Export Image]
+
+Adjust | Dither
+
+Dithering Algorithm [↓]
+└ Gradient Based
+
+Pixel Scale [<.>............] [ 1 ]
+Threshold   [......<.>......] [0.5]
+Color Dithering               [✓]
+
+---------- [ Posterize ] ----------
+Enable                        [✓]
+Levels      [.<.>...........] [5.0]
+-----------------------------------
+
+Gradient Remap                [✓]
+[⣿.............⣿.................⣿]
+[ + ] [ - ]   |   [     ]  [0.4542]
+
+--- Foot ---
+
+Zoom [100%]  |  [100%] [Fit]

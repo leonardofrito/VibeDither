@@ -38,7 +38,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export, StippleMinSize, StippleMaxSize }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -46,8 +46,8 @@ struct VibeDitherApp {
     target_format: wgpu::TextureFormat, input_texture: Option<wgpu::Texture>, output_texture: Option<wgpu::Texture>,
     egui_texture_id: Option<egui::TextureId>, settings: ColorSettings,
     curves_data: [u8; 1024], gradient_data: [u8; 1024], gradient_stops: Vec<GradientStop>,
-    selected_stop_id: Option<u64>, next_stop_id: u64, curve_points: Vec<egui::Pos2>,
-    dragging_point_idx: Option<usize>, active_tab: Tab, zoom_factor: f32, fit_to_screen: bool, pan_offset: egui::Vec2,
+    selected_stop_id: Option<u64>, next_stop_id: u64, curve_points: [Vec<egui::Pos2>; 4],
+    selected_curve_idx: usize, dragging_point_idx: Option<usize>, active_tab: Tab, zoom_factor: f32, fit_to_screen: bool, pan_offset: egui::Vec2,
     focus: KeyboardFocus, last_edit_time: f64, show_export_window: bool, export_settings: ExportSettings,
     export_row: usize, export_col: usize,
 }
@@ -62,14 +62,19 @@ impl VibeDitherApp {
             target_format = wgpu_render_state.target_format; pipeline.init(&wgpu_render_state.device, target_format);
         }
         let mut curves_data = [0u8; 1024];
-        let curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)];
-        let lut = spline::interpolate_spline(&curve_points);
+        let curve_points = [
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+        ];
+        let lut = spline::interpolate_spline(&curve_points[0]);
         for i in 0..256 { curves_data[i * 4] = lut[i]; curves_data[i * 4 + 1] = lut[i]; curves_data[i * 4 + 2] = lut[i]; curves_data[i * 4 + 3] = 255; }
         let gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
         let mut gradient_data = [0u8; 1024]; Self::generate_gradient_data(&gradient_stops, &mut gradient_data);
         Self {
             pipeline, current_image: None, device, queue, renderer, target_format, input_texture: None, output_texture: None, egui_texture_id: None,
-            settings: ColorSettings::default(), curves_data, gradient_data, gradient_stops, selected_stop_id: Some(0), next_stop_id: 2, curve_points, dragging_point_idx: None,
+            settings: ColorSettings::default(), curves_data, gradient_data, gradient_stops, selected_stop_id: Some(0), next_stop_id: 2, curve_points, selected_curve_idx: 0, dragging_point_idx: None,
             active_tab: Tab::Adjust, zoom_factor: 1.0, fit_to_screen: false, pan_offset: egui::Vec2::ZERO, focus: KeyboardFocus::Main, last_edit_time: 0.0, show_export_window: false, export_settings: ExportSettings::default(),
             export_row: 0, export_col: 0,
         }
@@ -128,8 +133,15 @@ impl VibeDitherApp {
     }
 
     fn reset_adjustments(&mut self) {
-        self.settings = ColorSettings::default(); self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)];
-        let lut = spline::interpolate_spline(&self.curve_points);
+        self.settings = ColorSettings::default(); 
+        self.curve_points = [
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+            vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
+        ];
+        self.selected_curve_idx = 0;
+        let lut = spline::interpolate_spline(&self.curve_points[0]);
         for i in 0..256 { self.curves_data[i * 4] = lut[i]; self.curves_data[i * 4 + 1] = lut[i]; self.curves_data[i * 4 + 2] = lut[i]; self.curves_data[i * 4 + 3] = 255; }
         self.gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
         self.selected_stop_id = Some(0); self.next_stop_id = 2; Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
@@ -211,7 +223,7 @@ impl eframe::App for VibeDitherApp {
         if !ctx.wants_keyboard_input() {
             if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
 
-            for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; } }
+            for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; self.pan_offset = egui::Vec2::ZERO; } }
 
             if esc {
                 self.focus = match self.focus {
@@ -238,8 +250,15 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::Light => { if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); } if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
                 KeyboardFocus::Color => { if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); } if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
                 KeyboardFocus::Dither => {
-                    if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } if k_p { self.focus = KeyboardFocus::PosterizeMenu; }
-                    if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } if k_f && (self.settings.dither_type == 3.0 || self.settings.dither_type == 10.0) { self.focus = KeyboardFocus::BayerSizeMenu; }
+                    if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } 
+                    if k_p { 
+                        self.focus = KeyboardFocus::PosterizeMenu; 
+                    }
+                    if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
+                    if k_t && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
+                    if k_f && (self.settings.dither_type == 3.0 || self.settings.dither_type == 10.0) { self.focus = KeyboardFocus::BayerSizeMenu; }
+                    if k_k && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::StippleMinSize; }
+                    if k_l && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::StippleMaxSize; }
                     if k_c && self.settings.dither_type != 1.0 { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; } 
                     if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
                 }
@@ -247,8 +266,35 @@ impl eframe::App for VibeDitherApp {
                     let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); } if k_v { m = Some(10.0); }
                     if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
                 }
-                KeyboardFocus::PosterizeMenu => { if k_e { self.settings.posterize_levels = if self.settings.posterize_levels > 0.0 { 0.0 } else { 4.0 }; changed = true; } if self.settings.posterize_levels > 0.0 { self.focus = KeyboardFocus::Editing("posterize"); } }
+                KeyboardFocus::PosterizeMenu => { 
+                    if k_e { 
+                        self.settings.posterize_levels = if self.settings.posterize_levels > 0.0 { 0.0 } else { 4.0 }; 
+                        changed = true;
+                    } 
+                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                    if delta != 0.0 && self.settings.posterize_levels > 0.0 {
+                        let now = ctx.input(|i| i.time);
+                        if now - self.last_edit_time > 0.1 {
+                            let step = if shift { 2.0 } else { 1.0 };
+                            self.settings.posterize_levels = (self.settings.posterize_levels + delta * step).clamp(2.0, 64.0);
+                            self.last_edit_time = now; changed = true;
+                        }
+                    }
+                }
                 KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
+                KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => {
+                    if space { self.focus = KeyboardFocus::Dither; }
+                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                    if delta != 0.0 {
+                        let now = ctx.input(|i| i.time);
+                        if now - self.last_edit_time > 0.1 {
+                            let step = if shift { 0.1 } else { 0.05 };
+                            if self.focus == KeyboardFocus::StippleMinSize { self.settings.stipple_min_size = (self.settings.stipple_min_size + delta * step).clamp(0.0, 5.0); }
+                            else { self.settings.stipple_max_size = (self.settings.stipple_max_size + delta * step).clamp(0.0, 5.0); }
+                            self.last_edit_time = now; changed = true;
+                        }
+                    }
+                }
                 KeyboardFocus::GradientMapMenu => {
                     if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                     let now = ctx.input(|i| i.time);
@@ -386,6 +432,41 @@ impl eframe::App for VibeDitherApp {
             } 
         });
 
+        egui::TopBottomPanel::top("top_shortcuts").frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(8.0)).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let focus_label = match self.focus {
+                    KeyboardFocus::Main => "[MAIN]",
+                    KeyboardFocus::Adjust | KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::Editing("exposure") | KeyboardFocus::Editing("contrast") | KeyboardFocus::Editing("highlights") | KeyboardFocus::Editing("shadows") | KeyboardFocus::Editing("whites") | KeyboardFocus::Editing("blacks") | KeyboardFocus::Editing("sharpness") | KeyboardFocus::Editing("temperature") | KeyboardFocus::Editing("tint") | KeyboardFocus::Editing("saturation") | KeyboardFocus::Editing("vibrance") => "[ADJUST]",
+                    KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("posterize") | KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => "[DITHER]",
+                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "[GRADIENT]",
+                    KeyboardFocus::Export => "[EXPORT]",
+                    _ => "[EDITING]",
+                };
+                ui.label(focus_label);
+                ui.add_space(8.0);
+
+                let d_type = self.settings.dither_type as i32;
+                let shortcut_text = match self.focus {
+                    KeyboardFocus::Main => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                    KeyboardFocus::Adjust => "Q:Light  E:Color  Esc:Back",
+                    KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
+                    KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
+                    KeyboardFocus::Dither => {
+                        if d_type == 10 { "M:Mode S:Scale P:Post T:Softness F:Spacing K:MinSize L:MaxSize Esc:Back" }
+                        else if d_type == 1 || d_type == 3 { "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back" }
+                        else { "M:Mode S:Scale P:Post C:Color G:Ramp Esc:Back" }
+                    },
+                    KeyboardFocus::PosterizeMenu => "E:Toggle ARROWS:Levels Esc:Back",
+                    KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
+                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::Editing(_) | KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
+                    KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt V:Stip",
+                    _ => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                };
+                ui.label(shortcut_text);
+            });
+        });
+
         egui::SidePanel::left("control_panel").resizable(true).default_width(320.0).frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(12.0)).show(ctx, |ui| {
             ui.heading("VibeDither v0.9"); ui.add_space(8.0);
             ui.vertical(|ui| {
@@ -440,7 +521,19 @@ impl eframe::App for VibeDitherApp {
                         ui.label("------------ [ Curves ] -----------"); ui.add_space(4.0);
                         let mut curves_changed = false;
                         ui.vertical(|ui| {
-                            ui.label("┌─ A ─ R ─ G ─ B ─────────────────┐");
+                            ui.horizontal(|ui| {
+                                ui.label("┌─");
+                                for (i, label) in [" A ", " R ", " G ", " B "].iter().enumerate() {
+                                    let is_selected = self.selected_curve_idx == i;
+                                    let text_color = if is_selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(0, 255, 0) };
+                                    if ui.add(egui::Label::new(egui::RichText::new(*label).color(text_color)).sense(egui::Sense::click())).clicked() {
+                                        self.selected_curve_idx = i;
+                                    }
+                                    if i < 3 { ui.label("─"); }
+                                }
+                                ui.label("────────────────┐");
+                            });
+
                             let size = egui::vec2(ui.available_width(), 160.0);
                             let (rect, response) = ui.allocate_at_least(size, egui::Sense::click_and_drag());
                             ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
@@ -453,7 +546,15 @@ impl eframe::App for VibeDitherApp {
                                 ui.painter().line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)], egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(0, 255, 0, 40)));
                             }
 
-                            let lut = spline::interpolate_spline(&self.curve_points);
+                            let curve_color = match self.selected_curve_idx {
+                                0 => egui::Color32::from_rgb(0, 255, 0),   // Master (Green)
+                                1 => egui::Color32::from_rgb(255, 50, 50), // Red
+                                2 => egui::Color32::from_rgb(50, 255, 50), // Green
+                                3 => egui::Color32::from_rgb(50, 50, 255), // Blue
+                                _ => egui::Color32::WHITE,
+                            };
+
+                            let lut = spline::interpolate_spline(&self.curve_points[self.selected_curve_idx]);
                             let mut points: Vec<egui::Pos2> = Vec::new();
                             for i in 0..256 {
                                 let val = lut[i];
@@ -461,44 +562,66 @@ impl eframe::App for VibeDitherApp {
                                 let y = rect.bottom() - (val as f32 / 255.0) * rect.height();
                                 points.push(egui::pos2(x, y));
                             }
-                            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, egui::Color32::from_rgb(0, 255, 0))));
+                            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, curve_color)));
 
                             if let Some(pos) = response.interact_pointer_pos() {
                                 let x_norm = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
                                 let y_norm = ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0);
+                                let current_points = &mut self.curve_points[self.selected_curve_idx];
+                                
                                 if response.drag_started() {
                                     let mut closest_idx = None; let mut min_dist = 0.05;
-                                    for (idx, p) in self.curve_points.iter().enumerate() { let dist = (p.x - x_norm).abs(); if dist < min_dist { min_dist = dist; closest_idx = Some(idx); } }
+                                    for (idx, p) in current_points.iter().enumerate() { let dist = (p.x - x_norm).abs(); if dist < min_dist { min_dist = dist; closest_idx = Some(idx); } }
                                     self.dragging_point_idx = closest_idx;
                                 }
                                 if response.dragged() {
                                     if let Some(idx) = self.dragging_point_idx {
-                                        if idx == 0 || idx == self.curve_points.len() - 1 { self.curve_points[idx].y = y_norm; }
-                                        else { let min_x = self.curve_points[idx-1].x + 0.001; let max_x = self.curve_points[idx+1].x - 0.001; self.curve_points[idx] = egui::pos2(x_norm.clamp(min_x, max_x), y_norm); }
+                                        let mut min_x = 0.0;
+                                        let mut max_x = 1.0;
+                                        if idx > 0 { min_x = current_points[idx-1].x + 0.001; }
+                                        if idx < current_points.len() - 1 { max_x = current_points[idx+1].x - 0.001; }
+                                        
+                                        current_points[idx] = egui::pos2(x_norm.clamp(min_x, max_x), y_norm);
                                         curves_changed = true;
                                     }
                                 }
                                 if response.drag_stopped() { self.dragging_point_idx = None; }
                                 if response.clicked() && !response.dragged() {
-                                    let mut exists = false; for p in &self.curve_points { if (p.x - x_norm).abs() < 0.02 { exists = true; break; } }
-                                    if !exists { self.curve_points.push(egui::pos2(x_norm, y_norm)); self.curve_points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap()); curves_changed = true; }
+                                    let mut exists = false; for p in current_points.iter() { if (p.x - x_norm).abs() < 0.02 { exists = true; break; } }
+                                    if !exists { current_points.push(egui::pos2(x_norm, y_norm)); current_points.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap()); curves_changed = true; }
                                 }
                             }
                             if response.secondary_clicked() {
                                 if let Some(pos) = response.interact_pointer_pos() {
                                     let x_norm = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
                                     let mut to_remove = None;
-                                    for (idx, p) in self.curve_points.iter().enumerate() { if (p.x - x_norm).abs() < 0.03 && idx != 0 && idx != self.curve_points.len() - 1 { to_remove = Some(idx); break; } }
-                                    if let Some(idx) = to_remove { self.curve_points.remove(idx); curves_changed = true; }
+                                    let current_points = &mut self.curve_points[self.selected_curve_idx];
+                                    for (idx, p) in current_points.iter().enumerate() { if (p.x - x_norm).abs() < 0.03 && idx != 0 && idx != current_points.len() - 1 { to_remove = Some(idx); break; } }
+                                    if let Some(idx) = to_remove { current_points.remove(idx); curves_changed = true; }
                                 }
                             }
-                            for p in &self.curve_points { let px = rect.left() + p.x * rect.width(); let py = rect.bottom() - p.y * rect.height(); ui.painter().circle_filled(egui::pos2(px, py), 3.0, egui::Color32::WHITE); }
+                            for p in &self.curve_points[self.selected_curve_idx] { let px = rect.left() + p.x * rect.width(); let py = rect.bottom() - p.y * rect.height(); ui.painter().circle_filled(egui::pos2(px, py), 3.0, egui::Color32::WHITE); }
                             ui.label("└─────────────────────────────────┘");
-                            if ui.button("[Reset Curves]").clicked() { self.curve_points = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)]; curves_changed = true; }
+                            if ui.button("[Reset Curves]").clicked() { self.curve_points[self.selected_curve_idx] = vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)]; curves_changed = true; }
                         });
                         if curves_changed {
-                            let lut = spline::interpolate_spline(&self.curve_points);
-                            for i in 0..256 { self.curves_data[i * 4] = lut[i]; self.curves_data[i * 4 + 1] = lut[i]; self.curves_data[i * 4 + 2] = lut[i]; }
+                            let master_lut = spline::interpolate_spline(&self.curve_points[0]);
+                            let r_lut = spline::interpolate_spline(&self.curve_points[1]);
+                            let g_lut = spline::interpolate_spline(&self.curve_points[2]);
+                            let b_lut = spline::interpolate_spline(&self.curve_points[3]);
+                            
+                            for i in 0..256 {
+                                // Red = Master(RedCurve(i))
+                                let r_val = r_lut[i];
+                                self.curves_data[i * 4] = master_lut[r_val as usize];
+                                
+                                let g_val = g_lut[i];
+                                self.curves_data[i * 4 + 1] = master_lut[g_val as usize];
+                                
+                                let b_val = b_lut[i];
+                                self.curves_data[i * 4 + 2] = master_lut[b_val as usize];
+                            }
+                            
                             if let Some(queue) = &self.queue { self.pipeline.update_curves(queue, &self.curves_data); }
                             side_changed = true;
                         }
@@ -584,6 +707,18 @@ impl eframe::App for VibeDitherApp {
                                 ui.label(if d_type == 10 { "Dot Spacing:" } else { "Matrix Size:" }); 
                                 if d_type == 10 {
                                     side_changed |= ui.add(egui::Slider::new(&mut self.settings.bayer_size, 1.0..=32.0).text("")).changed();
+                                    
+                                    ui.add_space(4.0);
+                                    ui.horizontal(|ui| {
+                                        let r_min = ui.add(egui::Slider::new(&mut self.settings.stipple_min_size, 0.0..=5.0).text("Min Size"));
+                                        if self.focus == KeyboardFocus::StippleMinSize { ui.painter().rect_stroke(r_min.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
+                                        side_changed |= r_min.changed();
+                                    });
+                                    ui.horizontal(|ui| {
+                                        let r_max = ui.add(egui::Slider::new(&mut self.settings.stipple_max_size, 0.0..=5.0).text("Max Size"));
+                                        if self.focus == KeyboardFocus::StippleMaxSize { ui.painter().rect_stroke(r_max.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
+                                        side_changed |= r_max.changed();
+                                    });
                                 } else {
                                     ui.horizontal(|ui| {
                                         let sizes = [2, 3, 4, 8]; 
@@ -605,23 +740,21 @@ impl eframe::App for VibeDitherApp {
 
         egui::TopBottomPanel::bottom("footer").frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(8.0)).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                let shortcut_text = match self.focus {
-                    KeyboardFocus::Main => "1 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
-                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "2 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
-                    KeyboardFocus::Editing(_) => "3 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
-                    KeyboardFocus::ModeSelection => "1 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt V:Stip",
-                    _ => "4 Available Shortcuts    Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
-                };
-                ui.label(shortcut_text);
+                ui.label("Zoom");
+                egui::ComboBox::from_id_source("zoom_selector")
+                    .selected_text(format!("[{:.0}%]", self.zoom_factor * 100.0))
+                    .show_ui(ui, |ui| {
+                        let zooms = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+                        for z in zooms {
+                            if ui.selectable_value(&mut self.zoom_factor, z, format!("{:.0}%", z * 100.0)).clicked() {
+                                self.fit_to_screen = false;
+                                self.pan_offset = egui::Vec2::ZERO;
+                            }
+                        }
+                    });
                 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("― [] X");
-                    ui.separator();
-                    ui.label(format!("Zoom [{:.0}%]", self.zoom_factor * 100.0));
-                    if ui.button("[Fit]").clicked() { self.fit_to_screen = true; }
-                    if ui.button("[100%]").clicked() { self.zoom_factor = 1.0; self.fit_to_screen = false; }
-                    ui.label("|");
-                });
+                if ui.button("[Fit]").clicked() { self.fit_to_screen = true; self.pan_offset = egui::Vec2::ZERO; }
+                if ui.button("[100%]").clicked() { self.zoom_factor = 1.0; self.fit_to_screen = false; self.pan_offset = egui::Vec2::ZERO; }
             });
         });
 
