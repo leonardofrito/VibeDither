@@ -1,0 +1,200 @@
+{
+  "main": {
+    "id": "d1908a42983cf449",
+    "type": "split",
+    "children": [
+      {
+        "id": "058e03f8b755df09",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "7b3508959a4a27d9",
+            "type": "leaf",
+            "state": {
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "1084e5ec7f61683c",
+    "type": "split",
+    "children": [
+      {
+        "id": "6a6ea7ad6f6666e0",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "1a10af4bafea73b2",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Files"
+            }
+          },
+          {
+            "id": "b0a2f4fbb4554b21",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Search"
+            }
+          },
+          {
+            "id": "a6384ace7c919548",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Bookmarks"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "f1cf30580cf4dbec",
+    "type": "split",
+    "children": [
+      {
+        "id": "e979aa6fb6aa5549",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "afda14fb38574e35",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "GEMINI.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Backlinks for GEMINI"
+            }
+          },
+          {
+            "id": "a457f11e06efb696",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "GEMINI.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Outgoing links from GEMINI"
+            }
+          },
+          {
+            "id": "8bc9a807bc47eb78",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Tags"
+            }
+          },
+          {
+            "id": "7ec44df5bc1d8a27",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "All properties"
+            }
+          },
+          {
+            "id": "e09e7826305e07e8",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "GEMINI.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Outline of GEMINI"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open quick switcher": false,
+      "graph:Open graph view": false,
+      "canvas:Create new canvas": false,
+      "daily-notes:Open today's daily note": false,
+      "templates:Insert template": false,
+      "command-palette:Open command palette": false,
+      "bases:Create new base": false
+    }
+  },
+  "active": "7b3508959a4a27d9",
+  "lastOpenFiles": [
+    "video_debug_log.md",
+    "target/debug/deps/vibedither.pdb",
+    "target/debug/deps/vibedither.exe",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/work-products.bin",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/query-cache.bin",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/f5huf7u8e82xrtn6kvdoaqmry.o",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/f4gomwtjwmrr1wyw2b8t59bbd.o",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/f0fl8quj6h4go4hbxd1ik21te.o",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/f1j72401dietzz45g8x1fbx98.o",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/eyyp6j7nmqz3f6qafs05cq0dm.o",
+    "target/debug/incremental/vibedither-1bbnm1v6gq0lx/s-hfy5dh304v-0cgejdy-1h9zqofvudtautvrsx1hyx0v7/ewkiij4ty5ocqkb74d1jpwacl.o",
+    "GEMINI.md",
+    "vibe_dither_exportOld.png",
+    "vibe_dither_exportNew.png",
+    "vibe_dither_InAppScreenshot.png"
+  ]
+}

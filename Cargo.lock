@@ -3698,6 +3698,7 @@ dependencies = [
  "env_logger",
  "image 0.24.9",
  "log",
+ "parking_lot",
  "pollster",
  "rfd",
  "serde",

@@ -62,6 +62,8 @@ impl Default for ColorSettings {
 pub struct Pipeline {
     pub pipeline: Option<wgpu::RenderPipeline>,
     pub bind_group_layout: Option<wgpu::BindGroupLayout>,
+    pub bind_group: Option<wgpu::BindGroup>, // New: Cached bind group
+    pub uniform_buffer: Option<wgpu::Buffer>, // New: Uniform buffer
     pub sampler: Option<wgpu::Sampler>,
     pub vertex_buffer: Option<wgpu::Buffer>,
     pub curves_texture: Option<wgpu::Texture>,
@@ -89,6 +91,8 @@ impl Pipeline {
         Self {
             pipeline: None,
             bind_group_layout: None,
+            bind_group: None,
+            uniform_buffer: None,
             sampler: None,
             vertex_buffer: None,
             curves_texture: None,
@@ -249,6 +253,43 @@ impl Pipeline {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+        
+        // Initial uniform buffer (empty for now, will be updated in render)
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("settings_uniform_buffer"),
+            size: std::mem::size_of::<ColorSettings>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create an initial bind group. This will be updated later with actual texture views.
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&curves_view), // Placeholder
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&curves_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&gradient_view),
+                },
+            ],
+            label: Some("initial_bind_group"),
+        });
+
 
         self.pipeline = Some(render_pipeline);
         self.bind_group_layout = Some(bind_group_layout);
@@ -258,6 +299,8 @@ impl Pipeline {
         self.curves_view = Some(curves_view);
         self.gradient_texture = Some(gradient_texture);
         self.gradient_view = Some(gradient_view);
+        self.uniform_buffer = Some(uniform_buffer); // Cache uniform buffer
+        self.bind_group = Some(bind_group); // Cache bind group
     }
 
     pub fn update_curves(&self, queue: &wgpu::Queue, data: &[u8; 1024]) {
@@ -362,13 +405,16 @@ impl Pipeline {
         let vertex_buffer = self.vertex_buffer.as_ref().unwrap();
         let curves_view = self.curves_view.as_ref().unwrap();
         let gradient_view = self.gradient_view.as_ref().unwrap();
+        let uniform_buffer = self.uniform_buffer.as_ref().unwrap(); // Use cached uniform buffer
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("uniform_buffer"),
-            contents: bytemuck::cast_slice(&[*settings]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        // Update the uniform buffer with new settings
+        queue.write_buffer(uniform_buffer, 0, bytemuck::cast_slice(&[*settings]));
 
+        // Recreate bind group only if necessary (e.g., input texture changes)
+        // For simplicity here, we'll just recreate it always to match the previous behavior
+        // in main.rs ensuring that the input_texture_view is correctly bound each time.
+        // A more optimized approach would cache this and only recreate if input_texture_view's
+        // underlying texture changes.
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: bind_group_layout,
             entries: &[
