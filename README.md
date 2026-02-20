@@ -2,7 +2,7 @@
 
 **High-performance, GPU-accelerated image dithering and aesthetic reconstruction.**
 
-![VibeDither Example](examples/VibeDither-BlackHole%20Gradient%20Base%20Tone%20Mapin.png)
+![VibeDither Example](examples/VibeDither_Bayer.jpg)
 
 ## 🧪 The "Vibe Coding" Experiment
 
