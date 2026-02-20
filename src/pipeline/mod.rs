@@ -2,8 +2,10 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 use image::GenericImageView;
 
+use serde::{Serialize, Deserialize};
+
 #[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable, Serialize, Deserialize)]
 pub struct ColorSettings {
     // Block 1: Basic Light
     pub exposure: f32,
