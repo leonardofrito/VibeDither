@@ -43,6 +43,9 @@
 - [x] Image-only focus (Removed all video code).
 
 ## Recent Achievements
+- **Fixed Export Color Accuracy:** Forced the internal and export pipelines to `Rgba8UnormSrgb` to ensure correct linear-to-sRGB gamma conversion during export, resolving the "dark color" shift.
+- **Enhanced Readback Logic:** Streamlined `read_back_image` to support dynamic texture targets and simplified pixel retrieval.
+- **Vibe Coding Milestone:** Documented the project's status as a 100% AI-vibecoded experiment (Gemini 2.5/3 CLI) in a comprehensive README.
 - Successfully implemented **Per-Channel RGB Curves** allowing independent control over Master, Red, Green, and Blue channels.
 - Improved curve interpolation logic to support linear extrapolation, ensuring X-axis movement of endpoints "crushes" or "clips" values correctly.
 - Reordered the adjustment pipeline to apply global Exposure and Contrast first, fixing the bias where highlights/whites were difficult to adjust.
