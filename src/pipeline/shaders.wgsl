@@ -104,30 +104,31 @@ fn apply_dither_step(val: f32, noise: f32, levels: f32) -> f32 {
 fn apply_adjustments(in_color: vec3<f32>, uv: vec2<f32>, tex_size: vec2<f32>) -> vec3<f32> {
     var color = in_color;
     
-    // Sharpness (Simplified for sub-sampling if needed, but here using main uv)
-    // In a true neighborhood search we'd need neighbor samples, but for dot-centers
-    // we can skip sharpness for performance or just use the center value.
-    
+    // 1. Exposure & White Balance
+    color *= pow(2.0, settings.exposure);
     color.r *= (1.0 + settings.temperature * 0.4);
     color.b *= (1.0 - settings.temperature * 0.4);
     color.g *= (1.0 - settings.tint * 0.25);
     color.r *= (1.0 + settings.tint * 0.1);
     color.b *= (1.0 + settings.tint * 0.1);
 
+    // 2. Contrast & Brightness
+    color += settings.brightness;
+    color = (color - 0.5) * settings.contrast + 0.5;
+
+    // 3. Highlights, Shadows, Whites, Blacks
     let lum_pre = get_luminance(color);
     color += color * smoothstep(0.4, 0.8, lum_pre) * settings.highlights * 0.5;
     color += color * (1.0 - smoothstep(0.2, 0.6, lum_pre)) * settings.shadows * 0.5;
     color += (1.0 - smoothstep(0.0, 0.3, lum_pre)) * settings.blacks * 0.3;
     color += smoothstep(0.7, 1.0, lum_pre) * settings.whites * 0.3;
 
-    color *= pow(2.0, settings.exposure);
-    color += settings.brightness;
-    color = (color - 0.5) * settings.contrast + 0.5;
-
+    // 4. Saturation & Vibrance
     let l_pre_sat = get_luminance(color);
     let color_sat = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
     color = mix(vec3<f32>(l_pre_sat), color, settings.saturation + settings.vibrance * (1.0 - color_sat));
 
+    // 5. RGB Curves
     color.r = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.r, 0.0, 1.0), 0.5), 0.0).r;
     color.g = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.g, 0.0, 1.0), 0.5), 0.0).g;
     color.b = textureSampleLevel(t_curves, s_diffuse, vec2<f32>(clamp(color.b, 0.0, 1.0), 0.5), 0.0).b;
@@ -190,48 +191,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let dy = get_luminance(textureSample(t_diffuse, s_diffuse, uv + vec2<f32>(0.0, 1.0/tex_size.y)).rgb) - get_luminance(color);
             let edge = clamp(abs(dx) + abs(dy), 0.0, 1.0);
             noise = mix(interleaved_gradient_noise(screen_pos), settings.dither_threshold, edge * 0.8);
-        } else if (d_type == 9) {
-            let p = screen_pos * 0.4;
-            let n = sin(p.x) * cos(p.y) + sin(p.y * 0.5) * cos(p.x * 0.5);
-            noise = fract(n * 2.0 + interleaved_gradient_noise(screen_pos) * 0.5);
-        } else if (d_type == 10) {
-            let size = max(1.5, settings.bayer_size);
-            let grid_pos = floor(screen_pos / size);
-            let softness = clamp(settings.dither_threshold, 0.0, 0.99);
-            var total_ink = 0.0;
-            
-            for (var xo = -1; xo <= 1; xo++) {
-                for (var yo = -1; yo <= 1; yo++) {
-                    let neighbor_grid_pos = grid_pos + vec2<f32>(f32(xo), f32(yo));
-                    let jitter = (hash22(neighbor_grid_pos) - 0.5) * 0.7;
-                    let dot_center = (neighbor_grid_pos + 0.5 + jitter) * size;
-                    let center_uv = (dot_center * d_scale) / tex_size;
-                    
-                    var center_sample = textureSampleLevel(t_diffuse, s_diffuse, center_uv, 0.0).rgb;
-                    center_sample = apply_adjustments(center_sample, center_uv, tex_size);
-                    
-                    let center_luma = get_luminance(center_sample);
-                    let darkness = clamp(1.0 - center_luma, 0.0, 1.0);
-                    
-                    // Dot size between min and max
-                    let radius = mix(settings.stipple_min_size, settings.stipple_max_size, darkness) * size * 0.5;
-                    
-                    let dist = length(screen_pos - dot_center);
-                    let dot_alpha = 1.0 - smoothstep(radius * (1.0 - softness), radius + 0.5, dist);
-                    total_ink = max(total_ink, dot_alpha);
+                } else if (d_type == 9) {
+                    let p = screen_pos * 0.4;
+                    let n = sin(p.x) * cos(p.y) + sin(p.y * 0.5) * cos(p.x * 0.5);
+                    noise = fract(n * 2.0 + interleaved_gradient_noise(screen_pos) * 0.5);
                 }
-            }
-            let final_luma = 1.0 - total_ink;
-            final_color = vec3<f32>(final_luma);
-            
-            if (settings.grad_enabled > 0.5) {
-                final_color = textureSample(t_gradient, s_diffuse, vec2<f32>(final_luma, 0.5)).rgb;
-            }
-            return vec4<f32>(clamp(final_color, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
-        }
-
-        if (settings.dither_color > 0.5) {
-            final_color.r = apply_dither_step(color.r, noise, settings.posterize_levels);
+        
+                if (settings.dither_color > 0.5) {            final_color.r = apply_dither_step(color.r, noise, settings.posterize_levels);
             final_color.g = apply_dither_step(color.g, noise, settings.posterize_levels);
             final_color.b = apply_dither_step(color.b, noise, settings.posterize_levels);
         } else {

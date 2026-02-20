@@ -38,7 +38,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export, StippleMinSize, StippleMaxSize }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -56,10 +56,10 @@ impl VibeDitherApp {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let mut pipeline = Pipeline::new();
         let mut device = None; let mut queue = None; let mut renderer = None;
-        let mut target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let target_format = wgpu::TextureFormat::Rgba8UnormSrgb;
         if let Some(wgpu_render_state) = &cc.wgpu_render_state {
             device = Some(wgpu_render_state.device.clone()); queue = Some(wgpu_render_state.queue.clone()); renderer = Some(wgpu_render_state.renderer.clone());
-            target_format = wgpu_render_state.target_format; pipeline.init(&wgpu_render_state.device, target_format);
+            pipeline.init(&wgpu_render_state.device, target_format);
         }
         let mut curves_data = [0u8; 1024];
         let curve_points = [
@@ -89,9 +89,9 @@ impl VibeDitherApp {
         }
     }
 
-    fn read_back_image(&self) -> Option<image::RgbaImage> {
-        let (Some(device), Some(queue), Some(output_tex), Some(current_img)) = (&self.device, &self.queue, &self.output_texture, &self.current_image) else { return None; };
-        let width = current_img.width(); let height = current_img.height();
+    fn read_back_image(&self, output_tex: &wgpu::Texture) -> Option<image::RgbaImage> {
+        let (Some(device), Some(queue), Some(current_img)) = (&self.device, &self.queue, &self.current_image) else { return None; };
+        let width = output_tex.width(); let height = output_tex.height();
         let bytes_per_pixel = 4; let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT; let unpadded = width * bytes_per_pixel; let padded = unpadded + (align - unpadded % align) % align;
         let staging = device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback_staging"), size: (padded * height) as u64, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("readback_enc") });
@@ -100,13 +100,9 @@ impl VibeDitherApp {
         let slice = staging.slice(..); let (tx, rx) = std::sync::mpsc::channel(); slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap()); device.poll(wgpu::Maintain::Wait);
         if let Ok(Ok(())) = rx.recv() {
             let data = slice.get_mapped_range(); let mut pixels = Vec::with_capacity((width * height * 4) as usize);
-            let is_bgra = self.target_format == wgpu::TextureFormat::Bgra8UnormSrgb || self.target_format == wgpu::TextureFormat::Bgra8Unorm;
             for row in 0..height { 
                 let start = (row * padded) as usize; 
-                for chunk in data[start..start+(width*4) as usize].chunks_exact(4) { 
-                    if is_bgra { pixels.push(chunk[2]); pixels.push(chunk[1]); pixels.push(chunk[0]); pixels.push(chunk[3]); } 
-                    else { pixels.push(chunk[0]); pixels.push(chunk[1]); pixels.push(chunk[2]); pixels.push(chunk[3]); }
-                } 
+                pixels.extend_from_slice(&data[start..start+(width*4) as usize]);
             }
             drop(data); staging.unmap();
             return image::RgbaImage::from_raw(width, height, pixels);
@@ -176,12 +172,12 @@ impl VibeDitherApp {
         let output_tex = device.create_texture(&wgpu::TextureDescriptor { label: Some("export_output_texture"), size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: self.target_format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC, view_formats: &[] });
         self.pipeline.render(device, queue, &input_tex.create_view(&wgpu::TextureViewDescriptor::default()), &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
         
-        if let Some(img_buf) = self.read_back_image() {
+        if let Some(img_buf) = self.read_back_image(&output_tex) {
             let mut dimg = image::DynamicImage::ImageRgba8(img_buf);
             if dimg.width() != self.export_settings.width_px || dimg.height() != self.export_settings.height_px { dimg = dimg.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest); }
             if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg { dimg = image::DynamicImage::ImageRgb8(dimg.to_rgb8()); }
             let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WEBP") };
-            let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann", "Stippling"];
+            let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
             let d_idx = self.settings.dither_type as usize;
             let d_name = d_names.get(d_idx).unwrap_or(&"Custom");
             let color_suffix = if self.settings.grad_enabled > 0.5 { "_Colored" } else { "" };
@@ -255,15 +251,12 @@ impl eframe::App for VibeDitherApp {
                         self.focus = KeyboardFocus::PosterizeMenu; 
                     }
                     if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
-                    if k_t && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
-                    if k_f && (self.settings.dither_type == 3.0 || self.settings.dither_type == 10.0) { self.focus = KeyboardFocus::BayerSizeMenu; }
-                    if k_k && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::StippleMinSize; }
-                    if k_l && self.settings.dither_type == 10.0 { self.focus = KeyboardFocus::StippleMaxSize; }
+                    if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
                     if k_c && self.settings.dither_type != 1.0 { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; } 
                     if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
                 }
                 KeyboardFocus::ModeSelection => {
-                    let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); } if k_v { m = Some(10.0); }
+                    let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); }
                     if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
                 }
                 KeyboardFocus::PosterizeMenu => { 
@@ -282,19 +275,6 @@ impl eframe::App for VibeDitherApp {
                     }
                 }
                 KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
-                KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => {
-                    if space { self.focus = KeyboardFocus::Dither; }
-                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
-                    if delta != 0.0 {
-                        let now = ctx.input(|i| i.time);
-                        if now - self.last_edit_time > 0.1 {
-                            let step = if shift { 0.1 } else { 0.05 };
-                            if self.focus == KeyboardFocus::StippleMinSize { self.settings.stipple_min_size = (self.settings.stipple_min_size + delta * step).clamp(0.0, 5.0); }
-                            else { self.settings.stipple_max_size = (self.settings.stipple_max_size + delta * step).clamp(0.0, 5.0); }
-                            self.last_edit_time = now; changed = true;
-                        }
-                    }
-                }
                 KeyboardFocus::GradientMapMenu => {
                     if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                     let now = ctx.input(|i| i.time);
@@ -437,7 +417,7 @@ impl eframe::App for VibeDitherApp {
                 let focus_label = match self.focus {
                     KeyboardFocus::Main => "[MAIN]",
                     KeyboardFocus::Adjust | KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::Editing("exposure") | KeyboardFocus::Editing("contrast") | KeyboardFocus::Editing("highlights") | KeyboardFocus::Editing("shadows") | KeyboardFocus::Editing("whites") | KeyboardFocus::Editing("blacks") | KeyboardFocus::Editing("sharpness") | KeyboardFocus::Editing("temperature") | KeyboardFocus::Editing("tint") | KeyboardFocus::Editing("saturation") | KeyboardFocus::Editing("vibrance") => "[ADJUST]",
-                    KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("posterize") | KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => "[DITHER]",
+                    KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("posterize") => "[DITHER]",
                     KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "[GRADIENT]",
                     KeyboardFocus::Export => "[EXPORT]",
                     _ => "[EDITING]",
@@ -452,15 +432,17 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => {
-                        if d_type == 10 { "M:Mode S:Scale P:Post T:Softness F:Spacing K:MinSize L:MaxSize Esc:Back" }
-                        else if d_type == 1 || d_type == 3 { "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back" }
-                        else { "M:Mode S:Scale P:Post C:Color G:Ramp Esc:Back" }
+                        if d_type == 1 || d_type == 3 {
+                            "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back"
+                        } else {
+                            "M:Mode S:Scale P:Post C:Color G:Ramp Esc:Back"
+                        }
                     },
                     KeyboardFocus::PosterizeMenu => "E:Toggle ARROWS:Levels Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
                     KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
-                    KeyboardFocus::Editing(_) | KeyboardFocus::StippleMinSize | KeyboardFocus::StippleMaxSize => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
-                    KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt V:Stip",
+                    KeyboardFocus::Editing(_) => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
+                    KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt",
                     _ => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
                 };
                 ui.label(shortcut_text);
@@ -628,7 +610,7 @@ impl eframe::App for VibeDitherApp {
                     },
                     Tab::Dither => {
                         let d_type = self.settings.dither_type as usize;
-                        let d_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "Lattice Boltzmann", "Stippling"];
+                        let d_names = ["None", "Threshold", "Random", "Bayer", "Blue Noise", "Diffusion Approx", "Stucki", "Atkinson", "Gradient Based", "Lattice Boltzmann"];
                         
                         ui.label("Dithering Algorithm [↓]");
                         egui::ComboBox::from_id_source("algo_combo").selected_text(format!("└ {}", d_names[d_type.min(d_names.len() - 1)])).show_ui(ui, |ui| {
@@ -639,11 +621,9 @@ impl eframe::App for VibeDitherApp {
                         ui.add_enabled_ui(d_type > 0, |ui| {
                             let mut scale_int = self.settings.dither_scale as i32; if ui.add(egui::Slider::new(&mut scale_int, 1..=32).text("Pixel Scale")).changed() { self.settings.dither_scale = scale_int as f32; side_changed = true; }
                             
-                            let thresh_label = if d_type == 10 { "Dot Softness" } else { "Threshold" };
-                            side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text(thresh_label)).changed();
-                            
-                            let mut color_d = self.settings.dither_color > 0.5;
-                            if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; }
+                            if d_type == 1 { 
+                                side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold")).changed(); 
+                            }
 
                             ui.add_space(6.0);
                             ui.label("---------- [ Posterize ] ----------");
@@ -687,7 +667,9 @@ impl eframe::App for VibeDitherApp {
                                         ui.label("|");
                                         if let Some(id) = self.selected_stop_id {
                                             if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
-                                                ui.color_edit_button_srgba(&mut stop.color);
+                                                if ui.color_edit_button_srgba(&mut stop.color).changed() {
+                                                    stops_ch = true;
+                                                }
                                                 ui.label(format!("[{:.4}]", stop.pos));
                                             }
                                         }
@@ -702,30 +684,16 @@ impl eframe::App for VibeDitherApp {
                                 if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
                             });
                             
-                            if d_type == 3 || d_type == 10 { 
+                            if d_type == 3 { 
                                 ui.add_space(8.0);
-                                ui.label(if d_type == 10 { "Dot Spacing:" } else { "Matrix Size:" }); 
-                                if d_type == 10 {
-                                    side_changed |= ui.add(egui::Slider::new(&mut self.settings.bayer_size, 1.0..=32.0).text("")).changed();
-                                    
-                                    ui.add_space(4.0);
-                                    ui.horizontal(|ui| {
-                                        let r_min = ui.add(egui::Slider::new(&mut self.settings.stipple_min_size, 0.0..=5.0).text("Min Size"));
-                                        if self.focus == KeyboardFocus::StippleMinSize { ui.painter().rect_stroke(r_min.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
-                                        side_changed |= r_min.changed();
-                                    });
-                                    ui.horizontal(|ui| {
-                                        let r_max = ui.add(egui::Slider::new(&mut self.settings.stipple_max_size, 0.0..=5.0).text("Max Size"));
-                                        if self.focus == KeyboardFocus::StippleMaxSize { ui.painter().rect_stroke(r_max.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
-                                        side_changed |= r_max.changed();
-                                    });
-                                } else {
-                                    ui.horizontal(|ui| {
-                                        let sizes = [2, 3, 4, 8]; 
-                                        for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } }
-                                    });
-                                }
+                                ui.label("Matrix Size:"); 
+                                ui.horizontal(|ui| {
+                                    let sizes = [2, 3, 4, 8]; 
+                                    for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } }
+                                });
                             }
+
+                            if d_type >= 1 { let mut color_d = self.settings.dither_color > 0.5; if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; } }
                         });
                     },
                 }
