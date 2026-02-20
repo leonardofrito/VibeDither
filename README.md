@@ -36,5 +36,13 @@ If you are an actual programmer, feel free to dive into the code. I honestly don
 
 Feel free to submit bugs or issues. I will look into them in my free time, but **please don't expect me to actually fix them.** Since I don't understand what I'm doing in the codebase, I'm just as likely to break it further as I am to fix it!
 
+## 🚀 Goals
+
+[x] Dithering
+[] Fix the UI
+[] Create a .exe
+[] Check performance
+[] Add video support?
+
 ---
 *Created with Gemini CLI and a lot of vibes.*
