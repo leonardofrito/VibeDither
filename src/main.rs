@@ -349,14 +349,24 @@ impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real, k_b_real) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
             [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)],
             i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight),
-            i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::V)
+            i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::B)
         ));
+
+        if !self.gradient_stops.is_empty() {
+            if let Some(id) = self.selected_stop_id {
+                if !self.gradient_stops.iter().any(|s| s.id == id) {
+                    self.selected_stop_id = self.gradient_stops.first().map(|s| s.id);
+                }
+            } else {
+                self.selected_stop_id = self.gradient_stops.first().map(|s| s.id);
+            }
+        }
 
         if !ctx.wants_keyboard_input() {
             if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
@@ -411,19 +421,20 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::Color => { if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); } if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
                 KeyboardFocus::Dither => {
                     if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } 
-                    if k_p { 
-                        self.focus = KeyboardFocus::BitDepthMenu; 
+                    if k_b_real { 
+                        self.focus = if self.focus == KeyboardFocus::BitDepthMenu { KeyboardFocus::Dither } else { KeyboardFocus::BitDepthMenu }; 
                     }
                     if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
                     if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
                     if k_c && self.settings.dither_type != 1.0 { self.settings.dither_color = if self.settings.dither_color > 0.5 { 0.0 } else { 1.0 }; changed = true; } 
-                    if k_g { self.focus = KeyboardFocus::GradientMapMenu; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
+                    if k_g { self.focus = if self.focus == KeyboardFocus::GradientMapMenu { KeyboardFocus::Dither } else { KeyboardFocus::GradientMapMenu }; } if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; }
                 }
                 KeyboardFocus::ModeSelection => {
                     let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); }
                     if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
                 }
                 KeyboardFocus::BitDepthMenu => { 
+                    if k_b_real { self.focus = KeyboardFocus::Dither; }
                     let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
                     if delta != 0.0 {
                         let now = ctx.input(|i| i.time);
@@ -437,14 +448,14 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
                 KeyboardFocus::GradientMapMenu => {
                     if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
+                    if k_g { self.focus = KeyboardFocus::Dither; }
                     let now = ctx.input(|i| i.time);
                     if now - self.last_edit_time > 0.166 {
                         if k_left_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
                         if k_right_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
                     }
                     if space { self.focus = KeyboardFocus::GradientPointEdit; }
-                    if k_n { let nid = self.next_stop_id; self.next_stop_id += 1; self.gradient_stops.push(GradientStop { id: nid, pos: 0.5, color: egui::Color32::GRAY }); self.selected_stop_id = Some(nid); self.gradient_stops.sort_by(|a,b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; }
-                    if k_b { if let Some(id) = self.selected_stop_id { if self.gradient_stops.len() > 2 { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } changed = true; } } }
+                    if esc { self.focus = KeyboardFocus::Dither; }
                 }
                 KeyboardFocus::GradientPointEdit => {
                     if space { self.focus = KeyboardFocus::GradientMapMenu; }
@@ -600,9 +611,9 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => {
                         if d_type == 1 || d_type == 3 {
-                            "M:Mode S:Scale P:Bits T:Thresh F:Bayer C:Color G:Pal Esc:Back"
+                            "M:Mode S:Scale B:Bits T:Thresh F:Bayer C:Color G:Pal Esc:Back"
                         } else {
-                            "M:Mode S:Scale P:Bits C:Color G:Pal Esc:Back"
+                            "M:Mode S:Scale B:Bits C:Color G:Pal Esc:Back"
                         }
                     },
                     KeyboardFocus::BitDepthMenu => "ARROWS:Change Bits Esc:Back",
