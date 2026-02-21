@@ -33,21 +33,25 @@
     - **Export:** PNG, JPG, WebP with Quality/Compression control, Transparency toggle, and Resolution Scaling (Aspect ratio lock).
     - **I/O:** Drag & drop, Clipboard (Paste), and System File Picker.
 
-## Status: v1.0 (2026-02-21)
-- [x] Official v1.0 Release.
-- [x] High-contrast Matrix Green UI with full-green button highlighting.
-- [x] Fixed all compilation errors and balanced implementation blocks.
-- [x] Nearest Neighbor filtering for sharp dither clarity.
+## Status: v1.1 Final Version (2026-02-21)
+- [x] Tactical Bit Depth System (1-4 bit range).
+- [x] Discrete Palette Editor with Box UI & Smart Interpolation.
+- [x] Full Keyboard Preset Navigation (Tactical Vertical Lists).
+- [x] Image-only focus (Video support deferred to future updates).
+- [x] Official v1.1 Final Release.
+- [x] High-contrast Matrix Green UI with dark-green contrast text on hover.
+- [x] CTRL+O (Open) and CTRL+V (Paste) shortcut support.
 - [x] Comprehensive Dithering suite (10 algorithms).
-- [x] Tactical Keyboard UI & Context-Aware Shortcuts.
-- [x] Per-channel RGB Curve editing with intelligent LUT generation.
-- [x] Robust Image Export system (Fixed gamma & encoders).
 
 ## Recent Achievements
+- **VibeDither v1.1 Final Version:** Reached full stability for image processing with a robust, keyboard-centric workflow.
+- **Implemented Tactical Bit Depth:** Replaced generic "Posterize" with a dedicated Bit Depth system (1-4 bits), providing precise control over color levels ($2^n$).
+- **Enhanced Palette Editor:** Transformed the gradient ramp into a discrete box-based Palette Editor with intelligent color interpolation on bit depth changes.
+- **Keyboard-Centric Presets:** Implemented tactical vertical lists for Adjust and Palette presets, enabling full navigation and application via keyboard (P to open, Arrows to select, Space to apply).
+- **Expanded Shortcuts:** Integrated system-level shortcuts for productivity, including CTRL+O for file picking and CTRL+V for immediate clipboard image pasting.
+- **Polished UI Contrast:** Refined hover and active states to use high-contrast dark green text on bright green backgrounds, ensuring legibility in the terminal aesthetic.
+- **Robust Navigation Toggles:** Added menu toggling logic for Bits (B), Palette (G), and Presets (P) to streamline the editing workflow.
 - **VibeDither v1.0 Milestone:** Finalized the application for release with a polished UI and robust static image processing pipeline.
-- **Enhanced UI Highlighting:** Implemented high-contrast green backgrounds for hovered and active buttons, ensuring a tactical terminal aesthetic.
-- **Fixed Core Pipeline Delimiters:** Resolved critical compilation errors by correctly structuring the `read_back_image` function and balancing implementation blocks.
-- **Implemented Adjust and Gradient Presets:** Added functionality to save, load, overwrite, and remove custom presets for image adjustments (Light, Color, Curves) and gradient ramps, including intelligent positioning and color averaging for new gradient stops.
 - **Slick Minimalist UI Overhaul:** Successfully implemented a high-performance, modern slick UI using `egui` after exploring TUI (`ratatui`) and `vizia` alternatives.
 - **Enhanced Tactical Styling:** Enforced a strict Matrix Green on Pure Black aesthetic with 0px rounding, 1:1 square slider handles, and frameless tactical buttons for a futuristic feel.
 - **Improved Slider Interaction:** Integrated `trailing_fill` and set slider tracks to 10% brightness gray to ensure visibility and intuitive feedback on a black background.
