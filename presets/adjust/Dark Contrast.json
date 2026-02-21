@@ -1,0 +1,71 @@
+{
+  "name": "Dark Contrast",
+  "settings": {
+    "exposure": -2.2,
+    "contrast": 1.7,
+    "highlights": 0.0,
+    "shadows": 0.0,
+    "whites": 0.0,
+    "blacks": 0.0,
+    "temperature": 0.0,
+    "tint": 0.0,
+    "saturation": 1.0,
+    "vibrance": 0.0,
+    "sharpness": 0.0,
+    "brightness": 0.0,
+    "dither_enabled": 0.0,
+    "dither_type": 0.0,
+    "dither_scale": 1.0,
+    "dither_threshold": 0.5,
+    "dither_color": 0.0,
+    "bit_depth": 1.0,
+    "bayer_size": 8.0,
+    "grad_enabled": 0.0,
+    "stipple_min_size": 0.0,
+    "stipple_max_size": 1.0,
+    "padding1": 0.0,
+    "padding2": 0.0
+  },
+  "curve_points": [
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  ]
+}
