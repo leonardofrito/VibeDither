@@ -1180,27 +1180,26 @@ fn setup_custom_style(ctx: &egui::Context) {
     let black = egui::Color32::from_rgb(0, 0, 0);
     let dark_gray = egui::Color32::from_rgb(25, 25, 25); // 10% brightness
     
-    style.visuals.dark_mode = true;
-    style.visuals.override_text_color = Some(matrix_green);
-    style.visuals.window_fill = black;
-    style.visuals.panel_fill = black;
+        style.visuals.dark_mode = true;
+        style.visuals.override_text_color = None; // Use widget-specific colors for contrast
+        style.visuals.window_fill = black;
+        style.visuals.panel_fill = black;
     
-    style.visuals.widgets.noninteractive.bg_fill = black;
-    style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-    style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, matrix_green);
+        style.visuals.widgets.noninteractive.bg_fill = black;
+        style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
+        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, matrix_green);
     
-    style.visuals.widgets.inactive.bg_fill = dark_gray; // Track visibility
-    style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-    style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.inactive.bg_fill = dark_gray; // Track visibility
+        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
+        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
     
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(0, 60, 0);
-    style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, matrix_green);
-    style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+        style.visuals.widgets.hovered.bg_fill = matrix_green;
+        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, black);
+        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
     
-    style.visuals.widgets.active.bg_fill = matrix_green;
-    style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, black);
-    style.visuals.widgets.active.rounding = egui::Rounding::ZERO;
-    
+        style.visuals.widgets.active.bg_fill = matrix_green;
+        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, black);
+        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;    
     style.visuals.selection.bg_fill = matrix_green.linear_multiply(0.5);
     
     // Slider handle size and aspect ratio (1:1)
