@@ -57,7 +57,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, BitDepthMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, BitDepthMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export, AdjustPresetMenu, PalettePresetMenu }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -76,6 +76,7 @@ struct VibeDitherApp {
     selected_gradient_preset: Option<String>,
     popup: PopupState,
     preset_name_input: String,
+    preset_index: usize,
 }
 
 impl VibeDitherApp {
@@ -104,6 +105,7 @@ impl VibeDitherApp {
             active_tab: Tab::Adjust, zoom_factor: 1.0, fit_to_screen: false, pan_offset: egui::Vec2::ZERO, focus: KeyboardFocus::Main, last_edit_time: 0.0, show_export_window: false, export_settings: ExportSettings::default(),
             export_row: 0, export_col: 0,
             adjust_presets: Vec::new(), gradient_presets: Vec::new(), selected_adjust_preset: None, selected_gradient_preset: None, popup: PopupState::None, preset_name_input: String::new(),
+            preset_index: 0,
         };
         app.load_presets();
         app
@@ -416,7 +418,7 @@ impl eframe::App for VibeDitherApp {
                     if k_left_d { self.pan_offset.x += pan_speed; }
                     if k_right_d { self.pan_offset.x -= pan_speed; }
                 }
-                KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
+                KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_p { self.focus = KeyboardFocus::AdjustPresetMenu; self.preset_index = 0; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
                 KeyboardFocus::Light => { if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); } if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
                 KeyboardFocus::Color => { if k_t { self.focus = KeyboardFocus::Editing("temperature"); } if k_e { self.focus = KeyboardFocus::Editing("tint"); } if k_s { self.focus = KeyboardFocus::Editing("saturation"); } if k_v { self.focus = KeyboardFocus::Editing("vibrance"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
                 KeyboardFocus::Dither => {
@@ -449,6 +451,7 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::GradientMapMenu => {
                     if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                     if k_g { self.focus = KeyboardFocus::Dither; }
+                    if k_p { self.focus = KeyboardFocus::PalettePresetMenu; self.preset_index = 0; }
                     let now = ctx.input(|i| i.time);
                     if now - self.last_edit_time > 0.166 {
                         if k_left_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
@@ -456,6 +459,36 @@ impl eframe::App for VibeDitherApp {
                     }
                     if space { self.focus = KeyboardFocus::GradientPointEdit; }
                     if esc { self.focus = KeyboardFocus::Dither; }
+                }
+                KeyboardFocus::AdjustPresetMenu => {
+                    if k_p || esc { self.focus = KeyboardFocus::Adjust; }
+                    let n = self.adjust_presets.len() + 1; // +1 for [None]
+                    if k_up_p { self.preset_index = self.preset_index.saturating_sub(1); }
+                    if k_down_p { self.preset_index = (self.preset_index + 1).min(n - 1); }
+                    if space {
+                        if self.preset_index == 0 { self.selected_adjust_preset = None; }
+                        else if let Some(p) = self.adjust_presets.get(self.preset_index - 1) {
+                            let name = p.name.clone();
+                            self.apply_adjust_preset(&name, ctx);
+                        }
+                        self.focus = KeyboardFocus::Adjust;
+                        changed = true;
+                    }
+                }
+                KeyboardFocus::PalettePresetMenu => {
+                    if k_p || esc { self.focus = KeyboardFocus::GradientMapMenu; }
+                    let n = self.gradient_presets.len() + 1;
+                    if k_up_p { self.preset_index = self.preset_index.saturating_sub(1); }
+                    if k_down_p { self.preset_index = (self.preset_index + 1).min(n - 1); }
+                    if space {
+                        if self.preset_index == 0 { self.selected_gradient_preset = None; }
+                        else if let Some(p) = self.gradient_presets.get(self.preset_index - 1) {
+                            let name = p.name.clone();
+                            self.apply_gradient_preset(&name, ctx);
+                        }
+                        self.focus = KeyboardFocus::GradientMapMenu;
+                        changed = true;
+                    }
                 }
                 KeyboardFocus::GradientPointEdit => {
                     if space { self.focus = KeyboardFocus::GradientMapMenu; }
@@ -594,9 +627,9 @@ impl eframe::App for VibeDitherApp {
             ui.horizontal(|ui| {
                 let focus_label = match self.focus {
                     KeyboardFocus::Main => "[MAIN]",
-                    KeyboardFocus::Adjust | KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::Editing("exposure") | KeyboardFocus::Editing("contrast") | KeyboardFocus::Editing("highlights") | KeyboardFocus::Editing("shadows") | KeyboardFocus::Editing("whites") | KeyboardFocus::Editing("blacks") | KeyboardFocus::Editing("sharpness") | KeyboardFocus::Editing("temperature") | KeyboardFocus::Editing("tint") | KeyboardFocus::Editing("saturation") | KeyboardFocus::Editing("vibrance") => "[ADJUST]",
+                    KeyboardFocus::Adjust | KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::AdjustPresetMenu | KeyboardFocus::Editing("exposure") | KeyboardFocus::Editing("contrast") | KeyboardFocus::Editing("highlights") | KeyboardFocus::Editing("shadows") | KeyboardFocus::Editing("whites") | KeyboardFocus::Editing("blacks") | KeyboardFocus::Editing("sharpness") | KeyboardFocus::Editing("temperature") | KeyboardFocus::Editing("tint") | KeyboardFocus::Editing("saturation") | KeyboardFocus::Editing("vibrance") => "[ADJUST]",
                     KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::BitDepthMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("bit_depth") => "[DITHER]",
-                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "[GRADIENT]",
+                    KeyboardFocus::GradientMapMenu | KeyboardFocus::PalettePresetMenu | KeyboardFocus::GradientPointEdit => "[GRADIENT]",
                     KeyboardFocus::Export => "[EXPORT]",
                     _ => "[EDITING]",
                 };
@@ -606,9 +639,10 @@ impl eframe::App for VibeDitherApp {
                 let d_type = self.settings.dither_type as i32;
                 let shortcut_text = match self.focus {
                     KeyboardFocus::Main => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
-                    KeyboardFocus::Adjust => "Q:Light  E:Color  Esc:Back",
+                    KeyboardFocus::Adjust => "Q:Light  E:Color  P:Presets  Esc:Back",
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
+                    KeyboardFocus::AdjustPresetMenu => "ARROWS:Select  Space:Apply  P/Esc:Back",
                     KeyboardFocus::Dither => {
                         if d_type == 1 || d_type == 3 {
                             "M:Mode S:Scale B:Bits T:Thresh F:Bayer C:Color G:Pal Esc:Back"
@@ -618,7 +652,9 @@ impl eframe::App for VibeDitherApp {
                     },
                     KeyboardFocus::BitDepthMenu => "ARROWS:Change Bits Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
-                    KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::GradientMapMenu => "E:Toggle  P:Presets  Space:Edit  G/Esc:Back",
+                    KeyboardFocus::PalettePresetMenu => "ARROWS:Select  Space:Apply  P/Esc:Back",
+                    KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
                     KeyboardFocus::Editing(_) => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
                     KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt",
                     _ => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
@@ -657,10 +693,14 @@ impl eframe::App for VibeDitherApp {
                             ui.label("Preset:");
                             let selected_text = self.selected_adjust_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 20));
                             let mut apply_adjust_preset_name = None;
-                            egui::ComboBox::from_id_source("adjust_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
-                                if ui.selectable_label(self.selected_adjust_preset.is_none(), Self::truncate_text("[None]", 20)).clicked() { self.selected_adjust_preset = None; }
-                                for preset in &self.adjust_presets {
-                                    if ui.selectable_label(self.selected_adjust_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 20)).clicked() {
+                            let mut combo = egui::ComboBox::from_id_source("adjust_preset_combo").selected_text(selected_text);
+                            if self.focus == KeyboardFocus::AdjustPresetMenu { combo = combo.open(); }
+                            combo.show_ui(ui, |ui| {
+                                let is_focused = self.focus == KeyboardFocus::AdjustPresetMenu;
+                                if ui.selectable_label(self.selected_adjust_preset.is_none() || (is_focused && self.preset_index == 0), Self::truncate_text("[None]", 20)).clicked() { self.selected_adjust_preset = None; }
+                                for (i, preset) in self.adjust_presets.iter().enumerate() {
+                                    let current_idx = i + 1;
+                                    if ui.selectable_label(self.selected_adjust_preset.as_deref() == Some(&preset.name) || (is_focused && self.preset_index == current_idx), Self::truncate_text(&preset.name, 20)).clicked() {
                                         apply_adjust_preset_name = Some(preset.name.clone());
                                     }
                                 }
@@ -952,11 +992,15 @@ impl eframe::App for VibeDitherApp {
                                 ui.label("Palette Preset:");
                                 let selected_text = self.selected_gradient_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 15));
                                 let mut apply_grad_preset_name = None;
-                                egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
-                                    if ui.selectable_label(self.selected_gradient_preset.is_none(), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
-                                    for preset in &self.gradient_presets {
+                                let mut combo = egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text);
+                                if self.focus == KeyboardFocus::PalettePresetMenu { combo = combo.open(); }
+                                combo.show_ui(ui, |ui| {
+                                    let is_focused = self.focus == KeyboardFocus::PalettePresetMenu;
+                                    if ui.selectable_label(self.selected_gradient_preset.is_none() || (is_focused && self.preset_index == 0), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
+                                    for (i, preset) in self.gradient_presets.iter().enumerate() {
+                                        let current_idx = i + 1;
                                         ui.horizontal(|ui| {
-                                            if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 15)).clicked() {
+                                            if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name) || (is_focused && self.preset_index == current_idx), Self::truncate_text(&preset.name, 15)).clicked() {
                                                 apply_grad_preset_name = Some(preset.name.clone());
                                             }
                                             let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
