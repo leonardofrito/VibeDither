@@ -1,0 +1,99 @@
+{
+  "name": "Hot Test",
+  "settings": {
+    "exposure": 0.4,
+    "contrast": 1.37,
+    "highlights": 0.08,
+    "shadows": 0.43,
+    "whites": 0.15,
+    "blacks": 0.0,
+    "temperature": 0.45,
+    "tint": -0.15,
+    "saturation": 1.38,
+    "vibrance": 0.65,
+    "sharpness": 0.22,
+    "brightness": 0.0,
+    "dither_enabled": 0.0,
+    "dither_type": 0.0,
+    "dither_scale": 1.0,
+    "dither_threshold": 0.5,
+    "dither_color": 0.0,
+    "posterize_levels": 0.0,
+    "bayer_size": 8.0,
+    "grad_enabled": 0.0,
+    "stipple_min_size": 0.0,
+    "stipple_max_size": 1.0,
+    "padding1": 0.0,
+    "padding2": 0.0
+  },
+  "curve_points": [
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 0.35452977,
+        "y": 0.2875
+      },
+      {
+        "x": 0.62929034,
+        "y": 0.66875
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 0.100450106,
+        "y": 0.06875
+      },
+      {
+        "x": 0.29544148,
+        "y": 0.275
+      },
+      {
+        "x": 0.75337577,
+        "y": 0.7375
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ],
+    [
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 0.30135033,
+        "y": 0.40625
+      },
+      {
+        "x": 0.73269486,
+        "y": 0.83125
+      },
+      {
+        "x": 1.0,
+        "y": 1.0
+      }
+    ]
+  ]
+}

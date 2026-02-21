@@ -858,6 +858,19 @@ impl eframe::App for VibeDitherApp {
                                     for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } }
                                 });
                             }
+
+                            let mut scale_int = self.settings.dither_scale as i32;
+                            if ui.add(egui::Slider::new(&mut scale_int, 1..=32).text("Pixel Scale").trailing_fill(true)).changed() {
+                                self.settings.dither_scale = scale_int as f32;
+                                side_changed = true;
+                            }
+
+                            if d_type == 1 {
+                                if ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold").trailing_fill(true)).changed() {
+                                    side_changed = true;
+                                }
+                            }
+
                             ui.add_space(6.0);
                             ui.label("---------- [ Bit Depth ] ----------");
                             let mut bits = self.settings.bit_depth as i32;
