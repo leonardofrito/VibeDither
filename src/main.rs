@@ -351,7 +351,7 @@ impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real, k_b_real) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, _k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real, k_b_real) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
@@ -689,39 +689,52 @@ impl eframe::App for VibeDitherApp {
                 let mut side_changed = false;
                 match self.active_tab {
                     Tab::Adjust => {
-                        ui.horizontal(|ui| {
-                            ui.label("Preset:");
-                            let selected_text = self.selected_adjust_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 20));
-                            let mut apply_adjust_preset_name = None;
-                            let mut combo = egui::ComboBox::from_id_source("adjust_preset_combo").selected_text(selected_text);
-                            if self.focus == KeyboardFocus::AdjustPresetMenu { combo = combo.open(); }
-                            combo.show_ui(ui, |ui| {
-                                let is_focused = self.focus == KeyboardFocus::AdjustPresetMenu;
-                                if ui.selectable_label(self.selected_adjust_preset.is_none() || (is_focused && self.preset_index == 0), Self::truncate_text("[None]", 20)).clicked() { self.selected_adjust_preset = None; }
-                                for (i, preset) in self.adjust_presets.iter().enumerate() {
-                                    let current_idx = i + 1;
-                                    if ui.selectable_label(self.selected_adjust_preset.as_deref() == Some(&preset.name) || (is_focused && self.preset_index == current_idx), Self::truncate_text(&preset.name, 20)).clicked() {
-                                        apply_adjust_preset_name = Some(preset.name.clone());
+                        if self.focus == KeyboardFocus::AdjustPresetMenu {
+                            ui.label("--- SELECT PRESET [Arrows/Space] ---");
+                            let mut to_apply = None;
+                            if ui.selectable_label(self.preset_index == 0, "[None]").clicked() { self.selected_adjust_preset = None; self.focus = KeyboardFocus::Adjust; side_changed = true; }
+                            for (i, preset) in self.adjust_presets.iter().enumerate() {
+                                if ui.selectable_label(self.preset_index == i + 1, Self::truncate_text(&preset.name, 25)).clicked() {
+                                    to_apply = Some(preset.name.clone());
+                                }
+                            }
+                            if let Some(name) = to_apply {
+                                self.apply_adjust_preset(&name, ctx);
+                                self.focus = KeyboardFocus::Adjust;
+                                side_changed = true;
+                            }
+                            ui.label("------------------------------------");
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.label("Preset:");
+                                let selected_text = self.selected_adjust_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 20));
+                                let mut apply_adjust_preset_name = None;
+                                egui::ComboBox::from_id_source("adjust_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
+                                    if ui.selectable_label(self.selected_adjust_preset.is_none(), Self::truncate_text("[None]", 20)).clicked() { self.selected_adjust_preset = None; }
+                                    for preset in &self.adjust_presets {
+                                        if ui.selectable_label(self.selected_adjust_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 20)).clicked() {
+                                            apply_adjust_preset_name = Some(preset.name.clone());
+                                        }
+                                    }
+                                });
+                                if let Some(name) = apply_adjust_preset_name {
+                                    self.apply_adjust_preset(&name, ctx);
+                                    side_changed = true;
+                                }
+                                if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
+                                    self.preset_name_input = String::new();
+                                    self.popup = PopupState::AddAdjust;
+                                }
+                                if let Some(name) = self.selected_adjust_preset.clone() {
+                                    if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
+                                        self.save_adjust_preset(name);
+                                    }
+                                    if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
+                                        self.popup = PopupState::RemoveAdjust;
                                     }
                                 }
                             });
-                            if let Some(name) = apply_adjust_preset_name {
-                                self.apply_adjust_preset(&name, ctx);
-                                side_changed = true;
-                            }
-                            if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
-                                self.preset_name_input = String::new();
-                                self.popup = PopupState::AddAdjust;
-                            }
-                            if let Some(name) = self.selected_adjust_preset.clone() {
-                                if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
-                                    self.save_adjust_preset(name);
-                                }
-                                if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
-                                    self.popup = PopupState::RemoveAdjust;
-                                }
-                            }
-                        });
+                        }
                         ui.add_space(8.0);
 
                         ui.label("------------ [ Light ] ------------"); ui.add_space(4.0);
@@ -987,49 +1000,62 @@ impl eframe::App for VibeDitherApp {
                                 }
                             });
 
-                            ui.add_space(8.0);
-                            ui.horizontal(|ui| {
-                                ui.label("Palette Preset:");
-                                let selected_text = self.selected_gradient_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 15));
-                                let mut apply_grad_preset_name = None;
-                                let mut combo = egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text);
-                                if self.focus == KeyboardFocus::PalettePresetMenu { combo = combo.open(); }
-                                combo.show_ui(ui, |ui| {
-                                    let is_focused = self.focus == KeyboardFocus::PalettePresetMenu;
-                                    if ui.selectable_label(self.selected_gradient_preset.is_none() || (is_focused && self.preset_index == 0), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
-                                    for (i, preset) in self.gradient_presets.iter().enumerate() {
-                                        let current_idx = i + 1;
-                                        ui.horizontal(|ui| {
-                                            if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name) || (is_focused && self.preset_index == current_idx), Self::truncate_text(&preset.name, 15)).clicked() {
-                                                apply_grad_preset_name = Some(preset.name.clone());
-                                            }
-                                            let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
-                                            let n = preset.stops.len();
-                                            for (i, stop) in preset.stops.iter().enumerate() {
-                                                let x0 = rect.left() + (i as f32 / n as f32) * rect.width();
-                                                let x1 = rect.left() + ((i + 1) as f32 / n as f32) * rect.width();
-                                                ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())), 0.0, stop.color);
-                                            }
-                                        });
+                            if self.focus == KeyboardFocus::PalettePresetMenu {
+                                ui.label("--- SELECT PALETTE [Arrows/Space] ---");
+                                let mut to_apply = None;
+                                if ui.selectable_label(self.preset_index == 0, "[None]").clicked() { self.selected_gradient_preset = None; self.focus = KeyboardFocus::GradientMapMenu; side_changed = true; }
+                                for (i, preset) in self.gradient_presets.iter().enumerate() {
+                                    if ui.selectable_label(self.preset_index == i + 1, Self::truncate_text(&preset.name, 25)).clicked() {
+                                        to_apply = Some(preset.name.clone());
                                     }
-                                });
-                                if let Some(name) = apply_grad_preset_name {
+                                }
+                                if let Some(name) = to_apply {
                                     self.apply_gradient_preset(&name, ctx);
+                                    self.focus = KeyboardFocus::GradientMapMenu;
                                     side_changed = true;
                                 }
-                                if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
-                                    self.preset_name_input = String::new();
-                                    self.popup = PopupState::AddGradient;
-                                }
-                                if let Some(name) = self.selected_gradient_preset.clone() {
-                                    if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
-                                        self.save_gradient_preset(name);
+                                ui.label("-------------------------------------");
+                            } else {
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    ui.label("Palette Preset:");
+                                    let selected_text = self.selected_gradient_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 15));
+                                    let mut apply_grad_preset_name = None;
+                                    egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
+                                        if ui.selectable_label(self.selected_gradient_preset.is_none(), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
+                                        for preset in &self.gradient_presets {
+                                            ui.horizontal(|ui| {
+                                                if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 15)).clicked() {
+                                                    apply_grad_preset_name = Some(preset.name.clone());
+                                                }
+                                                let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
+                                                let n = preset.stops.len();
+                                                for (i, stop) in preset.stops.iter().enumerate() {
+                                                    let x0 = rect.left() + (i as f32 / n as f32) * rect.width();
+                                                    let x1 = rect.left() + ((i + 1) as f32 / n as f32) * rect.width();
+                                                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())), 0.0, stop.color);
+                                                }
+                                            });
+                                        }
+                                    });
+                                    if let Some(name) = apply_grad_preset_name {
+                                        self.apply_gradient_preset(&name, ctx);
+                                        side_changed = true;
                                     }
-                                    if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
-                                        self.popup = PopupState::RemoveGradient;
+                                    if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
+                                        self.preset_name_input = String::new();
+                                        self.popup = PopupState::AddGradient;
                                     }
-                                }
-                            });
+                                    if let Some(name) = self.selected_gradient_preset.clone() {
+                                        if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
+                                            self.save_gradient_preset(name);
+                                        }
+                                        if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
+                                            self.popup = PopupState::RemoveGradient;
+                                        }
+                                    }
+                                });
+                            }
                         });
                     },
                 }
