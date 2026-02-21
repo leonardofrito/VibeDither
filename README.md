@@ -1,4 +1,4 @@
-# VibeDither (v0.9)
+# VibeDither (v1.1)
 
 **High-performance, GPU-accelerated image dithering and aesthetic reconstruction.**
 
@@ -15,11 +15,11 @@ This project is a 100% "vibecoded" application. It was built entirely through pr
 | :---: | :---: | :---: |
 | ![Aesthetic](examples/VibeDither-Weird%20Shape%20Aesthetic.jpg) | ![Gradient](examples/VibeDither_GradientBased_Colored.jpg) | ![Stipple](examples/VibeDither_Stippling_Colored%20V2.jpg) |
 
-## ⚠️ Current Status: v0.9 (Work in Progress)
+## ⚠️ Current Status: v1.1 (Work in Progress)
 
-The application is currently at version **0.9**. 
-- **The UI is currently broken/unpolished.** I needed to commit this version to Git because it represents a "mostly working" state of the core pipeline.
-- **The Vision:** The final version will feature a much more tactical, high-contrast terminal UI. You can see the design intent in the `UI/` folder.
+The application is currently at version **1.1**. 
+- **No video support yet.** 
+- **Performance not tested** 
 
 ## 🧱 The Walls We Hit
 
@@ -27,6 +27,7 @@ During development, we ran into two major "walls" where neither I nor the AI cou
 
 1.  **Video Support:** I wanted to add video processing, but since I don't understand **FFmpeg** and the AI struggled to bridge that gap without my technical guidance, we ended up running in circles. Video support has been removed to focus on static images.
 2.  **Halftone Effects:** I wanted a proper halftone effect, but neither the AI nor I could conceptually grasp the math/logic required to implement it correctly in the shader, so it was abandoned after several failed attempts.
+3. **Terminal Interface** While I did find [Ratatui](https://github.com/ratatui/ratatui) I could not find a way to add images to it, so having a preview was unfortunately impossible, but the UI looked exactly like I wanted. But I don't think there is a way to show a live image preview inside a TUI.
 
 ## 🛠️ Performance & Code Quality
 
