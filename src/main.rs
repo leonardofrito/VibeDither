@@ -349,16 +349,34 @@ impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
             i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
             [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)],
-            i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight)
+            i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight),
+            i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::V)
         ));
 
         if !ctx.wants_keyboard_input() {
             if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
+            if ctrl && k_o {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"])
+                    .pick_file() {
+                    self.load_content(ctx, path);
+                }
+            }
+            if ctrl && k_v_real {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Ok(img_data) = clipboard.get_image() {
+                        let rgba: Vec<u8> = img_data.bytes.to_vec();
+                        if let Some(img) = image::RgbaImage::from_raw(img_data.width as u32, img_data.height as u32, rgba) {
+                            self.load_image_to_gpu(ctx, image::DynamicImage::ImageRgba8(img));
+                        }
+                    }
+                }
+            }
 
             for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; self.pan_offset = egui::Vec2::ZERO; } }
 
@@ -789,56 +807,6 @@ impl eframe::App for VibeDitherApp {
                         }
                     },
                     Tab::Dither => {
-                        ui.horizontal(|ui| {
-                            ui.label("Grad Preset:");
-                            let selected_text = self.selected_gradient_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 15));
-                            let mut apply_grad_preset_name = None;
-                            egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
-                                if ui.selectable_label(self.selected_gradient_preset.is_none(), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
-                                for preset in &self.gradient_presets {
-                                    ui.horizontal(|ui| {
-                                        if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 15)).clicked() {
-                                            apply_grad_preset_name = Some(preset.name.clone());
-                                        }
-                                        // Visual representation of gradient
-                                        let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
-                                        for i in 0..10 {
-                                            let x0 = rect.left() + (i as f32 / 10.0) * rect.width();
-                                            let x1 = rect.left() + ((i + 1) as f32 / 10.0) * rect.width();
-                                            // Sample color from preset stops
-                                            let t = i as f32 / 9.0;
-                                            let mut lower = &preset.stops[0]; let mut upper = &preset.stops[preset.stops.len() - 1];
-                                            for stop in &preset.stops { if stop.pos <= t && stop.pos >= lower.pos { lower = stop; } if stop.pos >= t && stop.pos <= upper.pos { upper = stop; } }
-                                            let color = if (upper.pos - lower.pos).abs() < 0.0001 { lower.color } else {
-                                                let f = (t - lower.pos) / (upper.pos - lower.pos);
-                                                egui::Color32::from_rgba_unmultiplied(
-                                                    (lower.color.r() as f32 * (1.0 - f) + upper.color.r() as f32 * f) as u8,
-                                                    (lower.color.g() as f32 * (1.0 - f) + upper.color.g() as f32 * f) as u8,
-                                                    (lower.color.b() as f32 * (1.0 - f) + upper.color.b() as f32 * f) as u8, 255,
-                                                )
-                                            };
-                                            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())), 0.0, color);
-                                        }
-                                    });
-                                }
-                            });
-                            if let Some(name) = apply_grad_preset_name {
-                                self.apply_gradient_preset(&name, ctx);
-                                side_changed = true;
-                            }
-                            if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
-                                self.preset_name_input = String::new();
-                                self.popup = PopupState::AddGradient;
-                            }
-                            if let Some(name) = self.selected_gradient_preset.clone() {
-                                if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
-                                    self.save_gradient_preset(name);
-                                }
-                                if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
-                                    self.popup = PopupState::RemoveGradient;
-                                }
-                            }
-                        });
                         ui.add_space(8.0);
 
                         let d_type = self.settings.dither_type as usize;
@@ -881,17 +849,17 @@ impl eframe::App for VibeDitherApp {
                             ui.label("-----------------------------------");
                             
                             ui.add_space(10.0);
-                            let mut grad_e = self.settings.grad_enabled > 0.5;
-                            if ui.checkbox(&mut grad_e, "Palette Editor [G]").changed() { 
-                                self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; 
-                                if grad_e { self.settings.dither_color = 0.0; } // Auto-disable color dither
-                                side_changed = true; 
-                            }
-                            
                             let mut color_d = self.settings.dither_color > 0.5; 
                             if ui.checkbox(&mut color_d, "Color Dithering [C]").changed() { 
                                 self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; 
                                 if color_d { self.settings.grad_enabled = 0.0; } // Auto-disable palette
+                                side_changed = true; 
+                            }
+
+                            let mut grad_e = self.settings.grad_enabled > 0.5;
+                            if ui.checkbox(&mut grad_e, "Palette Editor [G]").changed() { 
+                                self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; 
+                                if grad_e { self.settings.dither_color = 0.0; } // Auto-disable color dither
                                 side_changed = true; 
                             }
                             ui.add_space(4.0);
@@ -965,6 +933,46 @@ impl eframe::App for VibeDitherApp {
                                     Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
                                     if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); }
                                     side_changed = true;
+                                }
+                            });
+
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.label("Palette Preset:");
+                                let selected_text = self.selected_gradient_preset.as_deref().map_or("[None]".to_string(), |s| Self::truncate_text(s, 15));
+                                let mut apply_grad_preset_name = None;
+                                egui::ComboBox::from_id_source("grad_preset_combo").selected_text(selected_text).show_ui(ui, |ui| {
+                                    if ui.selectable_label(self.selected_gradient_preset.is_none(), Self::truncate_text("[None]", 15)).clicked() { self.selected_gradient_preset = None; }
+                                    for preset in &self.gradient_presets {
+                                        ui.horizontal(|ui| {
+                                            if ui.selectable_label(self.selected_gradient_preset.as_deref() == Some(&preset.name), Self::truncate_text(&preset.name, 15)).clicked() {
+                                                apply_grad_preset_name = Some(preset.name.clone());
+                                            }
+                                            let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
+                                            let n = preset.stops.len();
+                                            for (i, stop) in preset.stops.iter().enumerate() {
+                                                let x0 = rect.left() + (i as f32 / n as f32) * rect.width();
+                                                let x1 = rect.left() + ((i + 1) as f32 / n as f32) * rect.width();
+                                                ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())), 0.0, stop.color);
+                                            }
+                                        });
+                                    }
+                                });
+                                if let Some(name) = apply_grad_preset_name {
+                                    self.apply_gradient_preset(&name, ctx);
+                                    side_changed = true;
+                                }
+                                if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() {
+                                    self.preset_name_input = String::new();
+                                    self.popup = PopupState::AddGradient;
+                                }
+                                if let Some(name) = self.selected_gradient_preset.clone() {
+                                    if ui.add(egui::Button::new("[ S ]").frame(false)).clicked() {
+                                        self.save_gradient_preset(name);
+                                    }
+                                    if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() {
+                                        self.popup = PopupState::RemoveGradient;
+                                    }
                                 }
                             });
                         });
