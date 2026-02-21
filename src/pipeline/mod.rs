@@ -29,7 +29,7 @@ pub struct ColorSettings {
     pub dither_threshold: f32,
     // Block 5: Dither Style
     pub dither_color: f32,
-    pub posterize_levels: f32,
+    pub bit_depth: f32,
     pub bayer_size: f32, // 2 to 8
     pub grad_enabled: f32,
     // Block 6: Stipple & Padding
@@ -59,7 +59,7 @@ impl Default for ColorSettings {
             dither_scale: 1.0,
             dither_threshold: 0.5,
             dither_color: 0.0,
-            posterize_levels: 0.0,
+            bit_depth: 1.0,
             bayer_size: 8.0,
             grad_enabled: 0.0,
             stipple_min_size: 0.0,

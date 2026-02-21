@@ -57,7 +57,7 @@ impl Default for ExportSettings {
 }
 
 #[derive(PartialEq, Clone, Copy, Debug)]
-enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, PosterizeMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
+enum KeyboardFocus { Main, Adjust, Light, Color, Dither, Editing(&'static str), ModeSelection, BitDepthMenu, BayerSizeMenu, GradientMapMenu, GradientPointEdit, Export }
 
 struct VibeDitherApp {
     pipeline: Pipeline, current_image: Option<DynamicImage>,
@@ -192,7 +192,7 @@ impl VibeDitherApp {
             new_settings.dither_scale = self.settings.dither_scale;
             new_settings.dither_threshold = self.settings.dither_threshold;
             new_settings.dither_color = self.settings.dither_color;
-            new_settings.posterize_levels = self.settings.posterize_levels;
+            new_settings.bit_depth = self.settings.bit_depth;
             new_settings.bayer_size = self.settings.bayer_size;
             new_settings.grad_enabled = self.settings.grad_enabled;
             
@@ -258,18 +258,13 @@ impl VibeDitherApp {
 
     fn generate_gradient_data(stops: &[GradientStop], data: &mut [u8; 1024]) {
         if stops.is_empty() { return; }
+        // Discrete palette mapping
+        let num_stops = stops.len();
         for i in 0..256 {
             let t = i as f32 / 255.0;
-            let mut lower = &stops[0]; let mut upper = &stops[stops.len() - 1];
-            for stop in stops { if stop.pos <= t && stop.pos >= lower.pos { lower = stop; } if stop.pos >= t && stop.pos <= upper.pos { upper = stop; } }
-            let color = if (upper.pos - lower.pos).abs() < 0.0001 { lower.color } else {
-                let f = (t - lower.pos) / (upper.pos - lower.pos);
-                egui::Color32::from_rgba_unmultiplied(
-                    (lower.color.r() as f32 * (1.0 - f) + upper.color.r() as f32 * f) as u8,
-                    (lower.color.g() as f32 * (1.0 - f) + upper.color.g() as f32 * f) as u8,
-                    (lower.color.b() as f32 * (1.0 - f) + upper.color.b() as f32 * f) as u8, 255,
-                )
-            };
+            // Find which bucket this pixel belongs to
+            let stop_idx = ((t * num_stops as f32).floor() as usize).min(num_stops - 1);
+            let color = stops[stop_idx].color;
             data[i * 4] = color.r(); data[i * 4 + 1] = color.g(); data[i * 4 + 2] = color.b(); data[i * 4 + 3] = 255;
         }
     }
@@ -376,7 +371,7 @@ impl eframe::App for VibeDitherApp {
                         _ => if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
                     },
                     KeyboardFocus::Light | KeyboardFocus::Color => KeyboardFocus::Adjust,
-                    KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu | KeyboardFocus::Export => KeyboardFocus::Dither,
+                    KeyboardFocus::ModeSelection | KeyboardFocus::BitDepthMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::GradientMapMenu | KeyboardFocus::Export => KeyboardFocus::Dither,
                     KeyboardFocus::GradientPointEdit => KeyboardFocus::GradientMapMenu,
                     _ => KeyboardFocus::Main,
                 };
@@ -399,7 +394,7 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::Dither => {
                     if k_m { self.focus = KeyboardFocus::ModeSelection; } if k_s { self.focus = KeyboardFocus::Editing("scale"); } 
                     if k_p { 
-                        self.focus = KeyboardFocus::PosterizeMenu; 
+                        self.focus = KeyboardFocus::BitDepthMenu; 
                     }
                     if k_t && self.settings.dither_type == 1.0 { self.focus = KeyboardFocus::Editing("threshold"); } 
                     if k_f && self.settings.dither_type == 3.0 { self.focus = KeyboardFocus::BayerSizeMenu; }
@@ -410,20 +405,16 @@ impl eframe::App for VibeDitherApp {
                     let mut m = None; if k_a { m = Some(0.0); } if k_s { m = Some(1.0); } if k_d { m = Some(2.0); } if k_f { m = Some(3.0); } if k_g { m = Some(4.0); } if k_h { m = Some(5.0); } if k_j { m = Some(6.0); } if k_k { m = Some(7.0); } if k_l { m = Some(8.0); } if k_c { m = Some(9.0); }
                     if let Some(val) = m { self.settings.dither_type = val; self.settings.dither_enabled = if val > 0.0 { 1.0 } else { 0.0 }; self.focus = KeyboardFocus::Dither; changed = true; }
                 }
-                KeyboardFocus::PosterizeMenu => { 
-                    if k_e { 
-                        self.settings.posterize_levels = if self.settings.posterize_levels > 0.0 { 0.0 } else { 4.0 }; 
-                        changed = true;
-                    } 
+                KeyboardFocus::BitDepthMenu => { 
                     let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
-                    if delta != 0.0 && self.settings.posterize_levels > 0.0 {
+                    if delta != 0.0 {
                         let now = ctx.input(|i| i.time);
                         if now - self.last_edit_time > 0.1 {
-                            let step = if shift { 2.0 } else { 1.0 };
-                            self.settings.posterize_levels = (self.settings.posterize_levels + delta * step).clamp(2.0, 64.0);
+                            self.settings.bit_depth = (self.settings.bit_depth + delta).clamp(1.0, 4.0);
                             self.last_edit_time = now; changed = true;
                         }
                     }
+                    if esc { self.focus = KeyboardFocus::Dither; }
                 }
                 KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
                 KeyboardFocus::GradientMapMenu => {
@@ -481,7 +472,7 @@ impl eframe::App for VibeDitherApp {
                         if now - self.last_edit_time > 0.166 {
                             let mut act_step = if shift { 0.1 } else { 0.05 };
                             if id == "exposure" { act_step = if shift { 0.15 } else { 0.05 }; }
-                            if id == "scale" || id == "posterize" { act_step = 1.0; if shift { act_step = 2.0; } }
+                            if id == "scale" || id == "bit_depth" { act_step = 1.0; }
                             match id {
                                 "exposure" => self.settings.exposure = (self.settings.exposure + delta * act_step).clamp(-5.0, 5.0),
                                 "contrast" => self.settings.contrast = (self.settings.contrast + delta * act_step).clamp(0.0, 2.0),
@@ -496,7 +487,7 @@ impl eframe::App for VibeDitherApp {
                                 "vibrance" => self.settings.vibrance = (self.settings.vibrance + delta * act_step).clamp(-1.0, 1.0),
                                 "scale" => self.settings.dither_scale = (self.settings.dither_scale + delta * act_step).clamp(1.0, 32.0),
                                 "threshold" => self.settings.dither_threshold = (self.settings.dither_threshold + delta * act_step).clamp(0.0, 1.0),
-                                "posterize" => self.settings.posterize_levels = (self.settings.posterize_levels + delta * act_step).clamp(0.0, 64.0),
+                                "bit_depth" => self.settings.bit_depth = (self.settings.bit_depth + delta * act_step).clamp(1.0, 4.0),
                                 _ => {}
                             }
                             self.last_edit_time = now; changed = true;
@@ -555,7 +546,7 @@ impl eframe::App for VibeDitherApp {
                 let frame = egui::Frame::none().fill(egui::Color32::BLACK).stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))).inner_margin(20.0);
                 frame.show(ui, |ui| {
                     let val = match id {
-                        "exposure" => self.settings.exposure, "contrast" => self.settings.contrast, "highlights" => self.settings.highlights, "shadows" => self.settings.shadows, "whites" => self.settings.whites, "blacks" => self.settings.blacks, "sharpness" => self.settings.sharpness, "temperature" => self.settings.temperature, "tint" => self.settings.tint, "saturation" => self.settings.saturation, "vibrance" => self.settings.vibrance, "scale" => self.settings.dither_scale, "threshold" => self.settings.dither_threshold, "posterize" => self.settings.posterize_levels, _ => 0.0,
+                        "exposure" => self.settings.exposure, "contrast" => self.settings.contrast, "highlights" => self.settings.highlights, "shadows" => self.settings.shadows, "whites" => self.settings.whites, "blacks" => self.settings.blacks, "sharpness" => self.settings.sharpness, "temperature" => self.settings.temperature, "tint" => self.settings.tint, "saturation" => self.settings.saturation, "vibrance" => self.settings.vibrance, "scale" => self.settings.dither_scale, "threshold" => self.settings.dither_threshold, "bit_depth" => self.settings.bit_depth, _ => 0.0,
                     };
                     ui.heading(format!("{}: {:.2}", id.to_uppercase(), val));
                 });
@@ -575,7 +566,7 @@ impl eframe::App for VibeDitherApp {
                 let focus_label = match self.focus {
                     KeyboardFocus::Main => "[MAIN]",
                     KeyboardFocus::Adjust | KeyboardFocus::Light | KeyboardFocus::Color | KeyboardFocus::Editing("exposure") | KeyboardFocus::Editing("contrast") | KeyboardFocus::Editing("highlights") | KeyboardFocus::Editing("shadows") | KeyboardFocus::Editing("whites") | KeyboardFocus::Editing("blacks") | KeyboardFocus::Editing("sharpness") | KeyboardFocus::Editing("temperature") | KeyboardFocus::Editing("tint") | KeyboardFocus::Editing("saturation") | KeyboardFocus::Editing("vibrance") => "[ADJUST]",
-                    KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::PosterizeMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("posterize") => "[DITHER]",
+                    KeyboardFocus::Dither | KeyboardFocus::ModeSelection | KeyboardFocus::BitDepthMenu | KeyboardFocus::BayerSizeMenu | KeyboardFocus::Editing("scale") | KeyboardFocus::Editing("threshold") | KeyboardFocus::Editing("bit_depth") => "[DITHER]",
                     KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "[GRADIENT]",
                     KeyboardFocus::Export => "[EXPORT]",
                     _ => "[EDITING]",
@@ -591,12 +582,12 @@ impl eframe::App for VibeDitherApp {
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
                     KeyboardFocus::Dither => {
                         if d_type == 1 || d_type == 3 {
-                            "M:Mode S:Scale P:Post T:Thresh F:Bayer C:Color G:Ramp Esc:Back"
+                            "M:Mode S:Scale P:Bits T:Thresh F:Bayer C:Color G:Pal Esc:Back"
                         } else {
-                            "M:Mode S:Scale P:Post C:Color G:Ramp Esc:Back"
+                            "M:Mode S:Scale P:Bits C:Color G:Pal Esc:Back"
                         }
                     },
-                    KeyboardFocus::PosterizeMenu => "E:Toggle ARROWS:Levels Esc:Back",
+                    KeyboardFocus::BitDepthMenu => "ARROWS:Change Bits Esc:Back",
                     KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
                     KeyboardFocus::GradientMapMenu | KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
                     KeyboardFocus::Editing(_) => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
@@ -867,104 +858,86 @@ impl eframe::App for VibeDitherApp {
                                     for s in sizes { if ui.selectable_label(self.settings.bayer_size as i32 == s, format!("{}x{}", s, s)).clicked() { self.settings.bayer_size = s as f32; side_changed = true; } }
                                 });
                             }
-                            let mut color_d = self.settings.dither_color > 0.5; if ui.checkbox(&mut color_d, "Color Dithering").changed() { self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; side_changed = true; }
-                            ui.add_space(4.0);
-
-                            let mut scale_int = self.settings.dither_scale as i32; if ui.add(egui::Slider::new(&mut scale_int, 1..=32).text("Pixel Scale").trailing_fill(true)).changed() { self.settings.dither_scale = scale_int as f32; side_changed = true; }
-                            
-                            if d_type == 1 { 
-                                side_changed |= ui.add(egui::Slider::new(&mut self.settings.dither_threshold, 0.0..=1.0).text("Threshold").trailing_fill(true)).changed(); 
-                            }
-
                             ui.add_space(6.0);
-                            ui.label("---------- [ Posterize ] ----------");
-                            let mut use_p = self.settings.posterize_levels > 0.0;
-                            if ui.checkbox(&mut use_p, "Enable").changed() { self.settings.posterize_levels = if use_p { 4.0 } else { 0.0 }; side_changed = true; }
-                            ui.add_enabled_ui(use_p, |ui| { side_changed |= ui.add(egui::Slider::new(&mut self.settings.posterize_levels, 2.0..=64.0).text("Levels").trailing_fill(true)).changed(); });
+                            ui.label("---------- [ Bit Depth ] ----------");
+                            let mut bits = self.settings.bit_depth as i32;
+                            if ui.add(egui::Slider::new(&mut bits, 1..=4).text("Bits").trailing_fill(true)).changed() {
+                                self.settings.bit_depth = bits as f32;
+                                side_changed = true;
+                            }
                             ui.label("-----------------------------------");
                             
                             ui.add_space(10.0);
                             let mut grad_e = self.settings.grad_enabled > 0.5;
-                            if ui.checkbox(&mut grad_e, "Gradient Remap").changed() { self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; side_changed = true; }
+                            if ui.checkbox(&mut grad_e, "Palette Editor [G]").changed() { 
+                                self.settings.grad_enabled = if grad_e { 1.0 } else { 0.0 }; 
+                                if grad_e { self.settings.dither_color = 0.0; } // Auto-disable color dither
+                                side_changed = true; 
+                            }
+                            
+                            let mut color_d = self.settings.dither_color > 0.5; 
+                            if ui.checkbox(&mut color_d, "Color Dithering [C]").changed() { 
+                                self.settings.dither_color = if color_d { 1.0 } else { 0.0 }; 
+                                if color_d { self.settings.grad_enabled = 0.0; } // Auto-disable palette
+                                side_changed = true; 
+                            }
+                            ui.add_space(4.0);
                             
                             ui.add_enabled_ui(grad_e, |ui| {
+                                let target_stops = (2.0f32.powf(self.settings.bit_depth)).round() as usize;
+                                if self.gradient_stops.len() != target_stops {
+                                    let old_stops = self.gradient_stops.clone();
+                                    self.gradient_stops.clear();
+                                    for i in 0..target_stops {
+                                        let t = if target_stops > 1 { i as f32 / (target_stops - 1) as f32 } else { 0.0 };
+                                        
+                                        // Sample from old palette
+                                        let color = if old_stops.is_empty() { egui::Color32::WHITE } else {
+                                            let mut lower = &old_stops[0]; let mut upper = &old_stops[old_stops.len() - 1];
+                                            for stop in &old_stops { if stop.pos <= t && stop.pos >= lower.pos { lower = stop; } if stop.pos >= t && stop.pos <= upper.pos { upper = stop; } }
+                                            if (upper.pos - lower.pos).abs() < 0.0001 { lower.color } else {
+                                                let f = (t - lower.pos) / (upper.pos - lower.pos);
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    (lower.color.r() as f32 * (1.0 - f) + upper.color.r() as f32 * f) as u8,
+                                                    (lower.color.g() as f32 * (1.0 - f) + upper.color.g() as f32 * f) as u8,
+                                                    (lower.color.b() as f32 * (1.0 - f) + upper.color.b() as f32 * f) as u8, 255,
+                                                )
+                                            }
+                                        };
+                                        let nid = self.next_stop_id; self.next_stop_id += 1;
+                                        self.gradient_stops.push(GradientStop { id: nid, pos: t, color });
+                                    }
+                                    Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
+                                    if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); }
+                                }
+
                                 let mut stops_ch = false;
                                 ui.vertical(|ui| {
-                                    let (ramp_r, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), 20.0), egui::Sense::hover());
-                                    for i in 0..255 {
-                                        let x0 = ramp_r.left() + (i as f32 / 255.0) * ramp_r.width();
-                                        let x1 = ramp_r.left() + ((i + 1) as f32 / 255.0) * ramp_r.width();
-                                        let c = egui::Color32::from_rgba_unmultiplied(self.gradient_data[i * 4], self.gradient_data[i * 4 + 1], self.gradient_data[i * 4 + 2], 255);
-                                        ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(x0, ramp_r.top()), egui::pos2(x1, ramp_r.bottom())), 0.0, c);
-                                    }
-                                    ui.painter().rect_stroke(ramp_r, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
-                                    
-                                    let mut active_id = self.selected_stop_id;
-                                    let mut dragged_id = None; let mut new_pos = 0.0;
-                                    for stop in &self.gradient_stops {
-                                        let x = ramp_r.left() + stop.pos * ramp_r.width();
-                                        let is_sel = Some(stop.id) == active_id;
-                                        ui.painter().line_segment([egui::pos2(x, ramp_r.top()), egui::pos2(x, ramp_r.bottom())], egui::Stroke::new(2.0, if is_sel { egui::Color32::WHITE } else { egui::Color32::from_rgba_unmultiplied(0, 255, 0, 180) }));
-                                        let h_res = ui.interact(egui::Rect::from_center_size(egui::pos2(x, ramp_r.center().y), egui::vec2(8.0, 20.0)), egui::Id::new(("grad", stop.id)), egui::Sense::click_and_drag());
-                                        if h_res.clicked() { active_id = Some(stop.id); }
-                                        if h_res.dragged() { active_id = Some(stop.id); new_pos = (stop.pos + h_res.drag_delta().x / ramp_r.width()).clamp(0.0, 1.0); dragged_id = Some(stop.id); }
-                                    }
-                                    if let Some(id) = dragged_id { if let Some(s) = self.gradient_stops.iter_mut().find(|s| s.id == id) { s.pos = new_pos; stops_ch = true; } }
-                                    self.selected_stop_id = active_id;
-
-                                    ui.horizontal(|ui| {
-                                        if ui.add(egui::Button::new("[ + ]").frame(false)).clicked() { 
-                                            let nid = self.next_stop_id; 
-                                            self.next_stop_id += 1; 
-                                            let mut new_pos = 0.5;
-                                            let mut new_color = egui::Color32::GRAY;
-
-                                            if let Some(selected_id) = self.selected_stop_id {
-                                                if let Some(selected_idx) = self.gradient_stops.iter().position(|s| s.id == selected_id) {
-                                                    let selected_stop = &self.gradient_stops[selected_idx];
-                                                    
-                                                    // Try to find the next stop
-                                                    let next_stop_opt = self.gradient_stops.get(selected_idx + 1);
-                                                    
-                                                    if let Some(next_stop) = next_stop_opt {
-                                                        // Between selected and next
-                                                        new_pos = (selected_stop.pos + next_stop.pos) / 2.0;
-                                                        new_color = egui::Color32::from_rgba_unmultiplied(
-                                                            (selected_stop.color.r() as u16 + next_stop.color.r() as u16 / 2) as u8,
-                                                            (selected_stop.color.g() as u16 + next_stop.color.g() as u16 / 2) as u8,
-                                                            (selected_stop.color.b() as u16 + next_stop.color.b() as u16 / 2) as u8, 255,
-                                                        );
-                                                    } else if selected_idx > 0 {
-                                                        // No next, so between selected and previous
-                                                        let prev_stop = &self.gradient_stops[selected_idx - 1];
-                                                        new_pos = (selected_stop.pos + prev_stop.pos) / 2.0;
-                                                        new_color = egui::Color32::from_rgba_unmultiplied(
-                                                            (selected_stop.color.r() as u16 + prev_stop.color.r() as u16 / 2) as u8,
-                                                            (selected_stop.color.g() as u16 + prev_stop.color.g() as u16 / 2) as u8,
-                                                            (selected_stop.color.b() as u16 + prev_stop.color.b() as u16 / 2) as u8, 255,
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            self.gradient_stops.push(GradientStop { id: nid, pos: new_pos, color: new_color }); 
-                                            self.selected_stop_id = Some(nid); 
-                                            stops_ch = true; 
+                                    let palette_height = 24.0;
+                                    let (rect, _) = ui.allocate_at_least(egui::vec2(ui.available_width(), palette_height), egui::Sense::hover());
+                                    let n = self.gradient_stops.len();
+                                    for (i, stop) in self.gradient_stops.iter().enumerate() {
+                                        let x0 = rect.left() + (i as f32 / n as f32) * rect.width();
+                                        let x1 = rect.left() + ((i + 1) as f32 / n as f32) * rect.width();
+                                        let box_rect = egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom()));
+                                        
+                                        let is_sel = Some(stop.id) == self.selected_stop_id;
+                                        ui.painter().rect_filled(box_rect, 0.0, stop.color);
+                                        if is_sel {
+                                            ui.painter().rect_stroke(box_rect.shrink(1.0), 0.0, egui::Stroke::new(2.0, egui::Color32::WHITE));
                                         }
-                                        if ui.add(egui::Button::new("[ - ]").frame(false)).clicked() { if let Some(id) = self.selected_stop_id { if self.gradient_stops.len() > 2 { self.gradient_stops.retain(|s| s.id != id); self.selected_stop_id = self.gradient_stops.first().map(|s| s.id); stops_ch = true; } } }
-                                        ui.label("|");
-                                        if let Some(id) = self.selected_stop_id {
-                                            if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                                        
+                                        let h_res = ui.interact(box_rect, egui::Id::new(("pal_box", stop.id)), egui::Sense::click());
+                                        if h_res.clicked() { self.selected_stop_id = Some(stop.id); }
+                                    }
+                                    ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+
+                                    if let Some(id) = self.selected_stop_id {
+                                        if let Some(stop) = self.gradient_stops.iter_mut().find(|s| s.id == id) {
+                                            ui.horizontal(|ui| {
                                                 if ui.color_edit_button_srgba(&mut stop.color).changed() {
                                                     stops_ch = true;
                                                 }
-                                                ui.label(format!("[{:.4}]", stop.pos));
-                                            }
-                                        }
-                                    });
-                                    if let Some(id) = self.selected_stop_id {
-                                        if let Some(stop) = self.gradient_stops.iter().find(|s| s.id == id) {
-                                            ui.add_space(4.0);
-                                            ui.horizontal(|ui| {
                                                 if ui.add(egui::Button::new("[ Copy ]").frame(false)).clicked() {
                                                     let mut clipboard = arboard::Clipboard::new().unwrap();
                                                     let color_str = format!("rgb({}, {}, {})", stop.color.r(), stop.color.g(), stop.color.b());
@@ -975,7 +948,11 @@ impl eframe::App for VibeDitherApp {
                                         }
                                     }
                                 });
-                                if stops_ch { self.gradient_stops.sort_by(|a, b| a.pos.partial_cmp(&b.pos).unwrap()); Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data); if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); } side_changed = true; }
+                                if stops_ch {
+                                    Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
+                                    if let Some(q) = &self.queue { self.pipeline.update_gradient(q, &self.gradient_data); }
+                                    side_changed = true;
+                                }
                             });
                         });
                     },
@@ -1180,27 +1157,27 @@ fn setup_custom_style(ctx: &egui::Context) {
     let black = egui::Color32::from_rgb(0, 0, 0);
     let dark_gray = egui::Color32::from_rgb(25, 25, 25); // 10% brightness
     
-        style.visuals.dark_mode = true;
-        style.visuals.override_text_color = None; // Use widget-specific colors for contrast
-        style.visuals.window_fill = black;
-        style.visuals.panel_fill = black;
-    
-        style.visuals.widgets.noninteractive.bg_fill = black;
-        style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-        style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, matrix_green);
-    
-        style.visuals.widgets.inactive.bg_fill = dark_gray; // Track visibility
-        style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
-        style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
-    
-        style.visuals.widgets.hovered.bg_fill = matrix_green;
-        style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, black);
-        style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
-    
-        style.visuals.widgets.active.bg_fill = matrix_green;
-        style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, black);
-        style.visuals.widgets.active.rounding = egui::Rounding::ZERO;    
-    style.visuals.selection.bg_fill = matrix_green.linear_multiply(0.5);
+            style.visuals.dark_mode = true;
+            style.visuals.override_text_color = Some(matrix_green);
+            style.visuals.window_fill = black;
+            style.visuals.panel_fill = black;
+        
+            style.visuals.widgets.noninteractive.bg_fill = black;
+            style.visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
+            style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, matrix_green);
+        
+            style.visuals.widgets.inactive.bg_fill = dark_gray; // Track visibility
+            style.visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, matrix_green);
+            style.visuals.widgets.inactive.rounding = egui::Rounding::ZERO;
+        
+                style.visuals.widgets.hovered.bg_fill = matrix_green;
+                style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 40, 0));
+                style.visuals.widgets.hovered.rounding = egui::Rounding::ZERO;
+                style.visuals.widgets.hovered.expansion = 1.0;
+            
+                style.visuals.widgets.active.bg_fill = matrix_green;
+                style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 40, 0));
+                style.visuals.widgets.active.rounding = egui::Rounding::ZERO;    style.visuals.selection.bg_fill = matrix_green.linear_multiply(0.5);
     
     // Slider handle size and aspect ratio (1:1)
     style.spacing.slider_width = 160.0; 

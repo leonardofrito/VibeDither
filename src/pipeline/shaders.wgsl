@@ -22,7 +22,7 @@ struct ColorSettings {
     whites: f32, blacks: f32, temperature: f32, tint: f32,
     saturation: f32, vibrance: f32, sharpness: f32, brightness: f32,
     dither_enabled: f32, dither_type: f32, dither_scale: f32, dither_threshold: f32,
-    dither_color: f32, posterize_levels: f32, bayer_size: f32, grad_enabled: f32,
+    dither_color: f32, bit_depth: f32, bayer_size: f32, grad_enabled: f32,
     stipple_min_size: f32, stipple_max_size: f32, padding1: f32, padding2: f32,
 };
 
@@ -88,7 +88,8 @@ fn get_bayer_threshold(p: vec2<f32>, size: i32) -> f32 {
     return 0.5;
 }
 
-fn apply_dither_step(val: f32, noise: f32, levels: f32) -> f32 {
+fn apply_dither_step(val: f32, noise: f32, bit_depth: f32) -> f32 {
+    let levels = pow(2.0, bit_depth);
     if (levels > 1.5) {
         let lv = levels - 1.0;
         let scaled = val * lv;
@@ -160,10 +161,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var final_color = color;
 
     if (settings.dither_enabled < 0.5) {
-        if (settings.posterize_levels > 1.5) {
-            let lv = settings.posterize_levels - 1.0;
-            final_color = floor(final_color * lv + 0.5) / lv;
-        }
+        // No bit depth reduction if dither is None
     } else {
         let d_scale = max(1.0, scale);
         let screen_pos = floor(in.tex_coords * tex_size / d_scale);
@@ -197,11 +195,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     noise = fract(n * 2.0 + interleaved_gradient_noise(screen_pos) * 0.5);
                 }
         
-                if (settings.dither_color > 0.5) {            final_color.r = apply_dither_step(color.r, noise, settings.posterize_levels);
-            final_color.g = apply_dither_step(color.g, noise, settings.posterize_levels);
-            final_color.b = apply_dither_step(color.b, noise, settings.posterize_levels);
+                if (settings.dither_color > 0.5) {
+            final_color.r = apply_dither_step(color.r, noise, settings.bit_depth);
+            final_color.g = apply_dither_step(color.g, noise, settings.bit_depth);
+            final_color.b = apply_dither_step(color.b, noise, settings.bit_depth);
         } else {
-            final_color = vec3<f32>(apply_dither_step(get_luminance(color), noise, settings.posterize_levels));
+            final_color = vec3<f32>(apply_dither_step(get_luminance(color), noise, settings.bit_depth));
         }
     }
 
