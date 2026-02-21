@@ -43,6 +43,11 @@
 - [x] Image-only focus (Removed all video code).
 
 ## Recent Achievements
+- **Implemented Adjust and Gradient Presets:** Added functionality to save, load, overwrite, and remove custom presets for image adjustments (Light, Color, Curves) and gradient ramps, including intelligent positioning and color averaging for new gradient stops.
+- **Enhanced UI Readability:** Implemented text truncation with ellipses for long preset names in dropdown menus.
+- **Improved Keyboard Navigation:** Refined keyboard focus logic to return to appropriate sub-menus (Light/Color) after editing adjustment parameters, streamlining the workflow.
+- **Corrected Slider Scaling:** Fixed the 'miniscule' slider issue by adjusting `egui::style::slider_width` to a more appropriate value (160.0px), ensuring better usability and visual consistency.
+- **Streamlined Dither Tab Hierarchy:** Reorganized the Dither tab to logically group Bayer matrix size and Color Dithering controls directly below the algorithm selection.
 - **Slick Minimalist UI Overhaul:** Successfully implemented a high-performance, modern slick UI using `egui` after exploring TUI (`ratatui`) and `vizia` alternatives.
 - **Enhanced Tactical Styling:** Enforced a strict Matrix Green on Pure Black aesthetic with 0px rounding, 1:1 square slider handles, and frameless tactical buttons for a futuristic feel.
 - **Improved Slider Interaction:** Integrated `trailing_fill` and set slider tracks to 10% brightness gray to ensure visibility and intuitive feedback on a black background.

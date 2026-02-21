@@ -234,6 +234,8 @@ impl VibeDitherApp {
             text.to_string()
         }
     }
+
+    fn read_back_image(&self, output_tex: &wgpu::Texture) -> Option<image::RgbaImage> {
         let (Some(device), Some(queue), Some(_current_img)) = (&self.device, &self.queue, &self.current_image) else { return None; };
         let width = output_tex.width(); let height = output_tex.height();
         let bytes_per_pixel = 4; let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT; let unpadded = width * bytes_per_pixel; let padded = unpadded + (align - unpadded % align) % align;
@@ -1168,13 +1170,6 @@ impl eframe::App for VibeDitherApp {
                     });
                 });
             }
-        }
-    }
-    fn truncate_text(text: &str, max_len: usize) -> String {
-        if text.len() > max_len {
-            format!("{}...", &text[..max_len - 3])
-        } else {
-            text.to_string()
         }
     }
 }
