@@ -3,6 +3,13 @@ name = "vibedither"
 version = "1.1.0"
 edition = "2021"
 
+[profile.release]
+opt-level = 3        # Maximum optimizations
+lto = true           # Link Time Optimization (smaller/faster binary)
+codegen-units = 1    # Better optimizations at the cost of build time
+panic = 'abort'      # Removes stack unwinding code (saves space)
+strip = true         # Automatically strips symbols (removes debug bloat)
+
 [dependencies]
 eframe = { version = "0.27.2", features = ["wgpu", "persistence"] }
 wgpu = "0.19.4"
@@ -17,6 +24,7 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 anyhow = "1.0.81"
 parking_lot = "0.12.1"
+ffmpeg-sidecar = "2.0.1"
 
 [build-dependencies]
 # Future: embed icon or manifest

@@ -1,5 +1,8 @@
+#![windows_subsystem = "windows"]
+
 mod pipeline;
 mod image_io;
+mod video_io;
 mod spline;
 
 use eframe::{egui, egui_wgpu};
@@ -43,16 +46,29 @@ struct GradientPreset {
 enum PopupState { None, AddAdjust, RemoveAdjust, AddGradient, RemoveGradient, OverwriteAdjust(String), OverwriteGradient(String) }
 
 #[derive(PartialEq, Clone, Copy)]
-enum ExportFormat { Png, Jpg, Webp }
+enum ExportFormat { Png, Jpg, Webp, Video }
+
+#[derive(PartialEq, Clone, Copy)]
+enum VideoContainer { Mp4, Mkv, Mov }
+
+#[derive(PartialEq, Clone, Copy)]
+enum AudioCodec { Aac, Mp3 }
 
 struct ExportSettings {
     format: ExportFormat, compression: f32, transparency: bool,
     use_percentage: bool, percentage: f32, width_px: u32, height_px: u32, link_aspect: bool,
+    video_container: VideoContainer, video_bitrate_mbps: f32,
+    export_audio: bool, audio_codec: AudioCodec, audio_bitrate_kbps: u32, audio_sample_rate_hz: u32,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { format: ExportFormat::Png, compression: 0.8, transparency: true, use_percentage: true, percentage: 1.0, width_px: 1920, height_px: 1080, link_aspect: true }
+        Self { 
+            format: ExportFormat::Png, compression: 0.8, transparency: true, 
+            use_percentage: true, percentage: 1.0, width_px: 1920, height_px: 1080, link_aspect: true,
+            video_container: VideoContainer::Mp4, video_bitrate_mbps: 10.0,
+            export_audio: true, audio_codec: AudioCodec::Aac, audio_bitrate_kbps: 128, audio_sample_rate_hz: 44100,
+        }
     }
 }
 
@@ -77,6 +93,16 @@ struct VibeDitherApp {
     popup: PopupState,
     preset_name_input: String,
     preset_index: usize,
+
+    // Video support
+    video_stream: Option<video_io::VideoStream>,
+    video_metadata: Option<video_io::VideoMetadata>,
+    current_video_path: Option<std::path::PathBuf>,
+    playback_active: bool,
+    last_frame_time: f64,
+    current_time: f32,
+    pending_seek_time: Option<f32>,
+    last_seek_input_time: f64,
 }
 
 impl VibeDitherApp {
@@ -106,17 +132,147 @@ impl VibeDitherApp {
             export_row: 0, export_col: 0,
             adjust_presets: Vec::new(), gradient_presets: Vec::new(), selected_adjust_preset: None, selected_gradient_preset: None, popup: PopupState::None, preset_name_input: String::new(),
             preset_index: 0,
+            video_stream: None, video_metadata: None, current_video_path: None, playback_active: false, last_frame_time: 0.0, current_time: 0.0,
+            pending_seek_time: None, last_seek_input_time: 0.0,
         };
         app.load_presets();
         app
     }
 
     fn load_content(&mut self, _ctx: &egui::Context, path: std::path::PathBuf) {
-        log::debug!("load_content called for path: {:?}", path);
-        // Assume it's an image
-        match image_io::load_from_path(&path) {
-            Ok(img) => self.load_image_to_gpu(_ctx, img),
-            Err(e) => log::error!("Failed to load image from path {:?}: {}", path, e),
+        log::debug!("load_content: Starting for path: {:?}", path);
+        
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        log::debug!("load_content: Detected extension: '{}'", ext);
+
+        let video_exts = ["mp4", "mkv", "mov", "avi", "webm", "m4v"];
+        
+        if video_exts.contains(&ext.as_str()) {
+            log::debug!("load_content: Identified as video, spawning stream.");
+            match video_io::spawn_video_stream(path.clone(), 0.0, None) {
+                Ok(stream) => {
+                    self.video_metadata = Some(video_io::VideoMetadata {
+                        width: stream.metadata.width,
+                        height: stream.metadata.height,
+                        fps: stream.metadata.fps,
+                        duration: stream.metadata.duration,
+                    });
+                    self.video_stream = Some(stream);
+                    self.current_video_path = Some(path.clone());
+                    self.playback_active = true;
+                    self.current_time = 0.0;
+                    self.last_frame_time = _ctx.input(|i| i.time);
+                    // Still load the first frame immediately for the UI
+                    if let Ok(img) = video_io::load_first_frame(&path) {
+                        self.load_image_to_gpu(_ctx, img);
+                    }
+                }
+                Err(e) => log::error!("load_content: Failed to spawn video stream: {}", e),
+            }
+        } else {
+            log::debug!("load_content: Identified as image, calling image_io::load_from_path.");
+            match image_io::load_from_path(&path) {
+                Ok(img) => {
+                    self.video_stream = None;
+                    self.video_metadata = None;
+                    self.current_video_path = None;
+                    self.playback_active = false;
+                    self.current_time = 0.0;
+                    self.load_image_to_gpu(_ctx, img)
+                },
+                Err(e) => log::error!("load_content: Failed to load image: {}", e),
+            }
+        }
+    }
+
+    fn seek_to(&mut self, ctx: &egui::Context, time: f32) {
+        self.current_time = time;
+        self.pending_seek_time = Some(time);
+        self.last_seek_input_time = ctx.input(|i| i.time);
+    }
+
+    fn process_pending_seek(&mut self, ctx: &egui::Context) {
+        if let Some(time) = self.pending_seek_time {
+            let now = ctx.input(|i| i.time);
+            // Wait 250ms after last input before spawning process
+            if now - self.last_seek_input_time > 0.25 {
+                if let Some(path) = self.current_video_path.clone() {
+                    log::info!("process_pending_seek: Spawning FFmpeg for {}s", time);
+                    
+                    let metadata_clone = self.video_metadata.as_ref().map(|m| video_io::VideoMetadata {
+                        width: m.width,
+                        height: m.height,
+                        fps: m.fps,
+                        duration: m.duration,
+                    });
+
+                    match video_io::spawn_video_stream(path, time, metadata_clone) {
+                        Ok(stream) => {
+                            self.video_stream = Some(stream);
+                            self.last_frame_time = now;
+                            self.pending_seek_time = None;
+                        }
+                        Err(e) => {
+                            log::error!("seek_to: Failed to restart stream: {}", e);
+                            self.pending_seek_time = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_video_frame(&mut self, _ctx: &egui::Context) {
+        if !self.playback_active { return; }
+        
+        if let Some(stream) = &self.video_stream {
+            let now = _ctx.input(|i| i.time);
+            let frame_duration = 1.0 / stream.metadata.fps as f64;
+            
+            if now - self.last_frame_time >= frame_duration {
+                let mut latest_pixels = None;
+                let mut count = 0;
+                
+                // Pull frames to catch up, but max 5 at once to avoid lag
+                while count < 5 && (now - self.last_frame_time >= frame_duration) {
+                                        if let Ok(pixels) = stream.receiver.try_recv() {
+                                            latest_pixels = Some(pixels);
+                                            self.last_frame_time += frame_duration;
+                                            self.current_time += frame_duration as f32;
+                                            
+                                            // Wrap current_time if it exceeds duration
+                                            if let Some(m) = &self.video_metadata {
+                                                if self.current_time >= m.duration {
+                                                    self.current_time = 0.0;
+                                                }
+                                            }
+                                            
+                                            count += 1;
+                                        }
+                     else {
+                        break;
+                    }
+                }
+
+                if let Some(pixels) = latest_pixels {
+                    let Some(device) = self.device.clone() else { return };
+                    let Some(queue) = self.queue.clone() else { return };
+                    
+                    if let Some(texture) = &self.input_texture {
+                        queue.write_texture(
+                            wgpu::ImageCopyTexture { texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                            &pixels,
+                            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * stream.metadata.width), rows_per_image: Some(stream.metadata.height) },
+                            wgpu::Extent3d { width: stream.metadata.width, height: stream.metadata.height, depth_or_array_layers: 1 },
+                        );
+
+                        if let (Some(input), Some(output)) = (&self.input_texture, &self.output_texture) {
+                            self.pipeline.render(&device, &queue, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
+                        }
+                    }
+                }
+            }
+            _ctx.request_repaint();
         }
     }
 
@@ -319,7 +475,7 @@ impl VibeDitherApp {
             let mut dimg = image::DynamicImage::ImageRgba8(img_buf);
             if dimg.width() != self.export_settings.width_px || dimg.height() != self.export_settings.height_px { dimg = dimg.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest); }
             if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg { dimg = image::DynamicImage::ImageRgb8(dimg.to_rgb8()); }
-            let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WEBP") };
+            let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WEBP"), ExportFormat::Video => ("mp4", "MP4") };
             let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
             let d_idx = self.settings.dither_type as usize;
             let d_name = d_names.get(d_idx).unwrap_or(&"Custom");
@@ -341,23 +497,151 @@ impl VibeDitherApp {
                         encoder.encode_image(&dimg).ok();
                     },
                     ExportFormat::Webp => { dimg.save(path).ok(); },
+                    _ => {}
                 }
             }
         }
+    }
+
+    fn export_video(&mut self) {
+        let (Some(device), Some(queue), Some(path), Some(meta)) = (&self.device, &self.queue, &self.current_video_path, &self.video_metadata) else { return };
+        
+        let (ext, filt) = match self.export_settings.video_container {
+            VideoContainer::Mp4 => ("mp4", "MP4"),
+            VideoContainer::Mkv => ("mkv", "MKV"),
+            VideoContainer::Mov => ("mov", "MOV"),
+        };
+
+        let default_name = format!("VibeDither_Export.{}", ext);
+        let Some(out_path) = rfd::FileDialog::new().add_filter(filt, &[ext]).set_file_name(&default_name).save_file() else { return };
+
+        log::info!("export_video: Starting export to {:?}", out_path);
+
+        let out_w = self.export_settings.width_px;
+        let out_h = self.export_settings.height_px;
+        let bitrate = format!("{}M", self.export_settings.video_bitrate_mbps);
+
+        // 1. Setup Source Decoder (Fastest possible decode)
+        let mut decoder_cmd = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+        decoder_cmd.args([
+            "-i", path.to_str().unwrap(),
+            "-f", "rawvideo",
+            "-pix_fmt", "rgba",
+            "-"
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+
+        let mut decoder_child = decoder_cmd.spawn().expect("Failed to spawn decoder");
+        let mut decoder_stdout = decoder_child.stdout.take().expect("Failed to open decoder stdout");
+
+        // 2. Setup Destination Encoder
+        let mut encoder_cmd = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+        
+        let mut encoder_args = vec![
+            "-f".to_string(), "rawvideo".to_string(),
+            "-pixel_format".to_string(), "rgba".to_string(),
+            "-video_size".to_string(), format!("{}x{}", out_w, out_h),
+            "-framerate".to_string(), meta.fps.to_string(),
+            "-i".to_string(), "-".to_string(), // Input 0: processed video frames from pipe
+        ];
+
+        if self.export_settings.export_audio {
+            // Input 1: Original file for audio
+            encoder_args.extend(["-i".to_string(), path.to_str().unwrap().to_string()]);
+            encoder_args.extend(["-c:a".to_string(), match self.export_settings.audio_codec { AudioCodec::Aac => "aac", AudioCodec::Mp3 => "libmp3lame" }.to_string()]);
+            encoder_args.extend(["-b:a".to_string(), format!("{}k", self.export_settings.audio_bitrate_kbps)]);
+            encoder_args.extend(["-ar".to_string(), self.export_settings.audio_sample_rate_hz.to_string()]);
+            // Map video from pipe (0:v) and audio from original file (1:a)
+            encoder_args.extend(["-map".to_string(), "0:v".to_string(), "-map".to_string(), "1:a".to_string()]);
+            // Ensure audio doesn't outlast video
+            encoder_args.extend(["-shortest".to_string()]);
+        } else {
+            encoder_args.push("-an".to_string());
+        }
+
+        encoder_args.extend([
+            "-c:v".to_string(), "libx264".to_string(),
+            "-pix_fmt".to_string(), "yuv420p".to_string(),
+            "-b:v".to_string(), bitrate.clone(),
+            "-maxrate".to_string(), bitrate.clone(),
+            "-bufsize".to_string(), bitrate,
+            "-y".to_string(), // Overwrite
+            out_path.to_str().unwrap().to_string()
+        ]);
+
+        encoder_cmd.args(&encoder_args)
+            .stdin(std::process::Stdio::piped());
+
+        let mut encoder_child = encoder_cmd.spawn().expect("Failed to spawn encoder");
+        let mut encoder_stdin = encoder_child.stdin.take().expect("Failed to open encoder stdin");
+
+        // 3. Prepare GPU textures for export size
+        let input_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("export_input_tex"),
+            size: wgpu::Extent3d { width: meta.width, height: meta.height, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let output_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("export_output_tex"),
+            size: wgpu::Extent3d { width: out_w, height: out_h, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: self.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        // 4. Frame Loop
+        let frame_size = (meta.width * meta.height * 4) as usize;
+        let mut buffer = vec![0u8; frame_size];
+
+        use std::io::{Read, Write};
+        
+        log::info!("export_video: Entering frame loop...");
+        while decoder_stdout.read_exact(&mut buffer).is_ok() {
+            // Upload to GPU
+            queue.write_texture(
+                wgpu::ImageCopyTexture { texture: &input_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &buffer,
+                wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4 * meta.width), rows_per_image: Some(meta.height) },
+                wgpu::Extent3d { width: meta.width, height: meta.height, depth_or_array_layers: 1 },
+            );
+
+            // Render
+            self.pipeline.render(device, queue, &input_tex.create_view(&wgpu::TextureViewDescriptor::default()), &output_tex.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
+
+            // Read back (Synchronous for export)
+            if let Some(processed_img) = self.read_back_image(&output_tex) {
+                if encoder_stdin.write_all(processed_img.as_raw()).is_err() {
+                    break;
+                }
+            }
+        }
+
+        log::info!("export_video: Export finished.");
+        drop(encoder_stdin);
+        let _ = encoder_child.wait();
+        let _ = decoder_child.kill();
     }
 }
 
 impl eframe::App for VibeDitherApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
+        self.process_pending_seek(ctx);
+        self.update_video_frame(ctx);
         let mut changed = false;
-        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, _k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real, k_b_real) = ctx.input(|i| (
+        let (esc, space, k_a, k_d, k_q, k_e, k_c, k_h, _k_z, k_s, k_b, k_w, k_f, k_t, k_v, k_m, _k_o, k_p, _k_n, k_g, k_r, k_y, k_l, k_j, k_k, k_up_p, k_down_p, k_left_p, k_right_p, shift, ctrl, keys_0_9, k_up_d, k_down_d, k_left_d, k_right_d, k_o, k_v_real, k_b_real, comma, period) = ctx.input(|i| (
             i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Space), i.key_pressed(egui::Key::A), i.key_pressed(egui::Key::D), i.key_pressed(egui::Key::Q), i.key_pressed(egui::Key::E), i.key_pressed(egui::Key::C), i.key_pressed(egui::Key::H), i.key_pressed(egui::Key::Z), i.key_pressed(egui::Key::S), i.key_pressed(egui::Key::B), i.key_pressed(egui::Key::W), i.key_pressed(egui::Key::F), i.key_pressed(egui::Key::T), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::M), i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::P), i.key_pressed(egui::Key::N), i.key_pressed(egui::Key::G), i.key_pressed(egui::Key::R), i.key_pressed(egui::Key::Y), i.key_pressed(egui::Key::L), i.key_pressed(egui::Key::J), i.key_pressed(egui::Key::K),
-            i.key_pressed(egui::Key::W) || i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::A) || i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::D) || i.key_pressed(egui::Key::ArrowRight),
+            i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight),
             i.modifiers.shift, i.modifiers.ctrl,
             [i.key_pressed(egui::Key::Num0), i.key_pressed(egui::Key::Num1), i.key_pressed(egui::Key::Num2), i.key_pressed(egui::Key::Num3), i.key_pressed(egui::Key::Num4), i.key_pressed(egui::Key::Num5), i.key_pressed(egui::Key::Num6), i.key_pressed(egui::Key::Num7), i.key_pressed(egui::Key::Num8), i.key_pressed(egui::Key::Num9)],
             i.key_down(egui::Key::ArrowUp), i.key_down(egui::Key::ArrowDown), i.key_down(egui::Key::ArrowLeft), i.key_down(egui::Key::ArrowRight),
-            i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::B)
+            i.key_pressed(egui::Key::O), i.key_pressed(egui::Key::V), i.key_pressed(egui::Key::B),
+            i.key_pressed(egui::Key::Comma), i.key_pressed(egui::Key::Period)
         ));
 
         if !self.gradient_stops.is_empty() {
@@ -374,7 +658,7 @@ impl eframe::App for VibeDitherApp {
             if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
             if ctrl && k_o {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"])
+                    .add_filter("Content", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif", "mp4", "mkv", "mov", "avi", "webm", "m4v"])
                     .pick_file() {
                     self.load_content(ctx, path);
                 }
@@ -410,13 +694,51 @@ impl eframe::App for VibeDitherApp {
 
             match self.focus {
                 KeyboardFocus::Main => { 
+                    if space { 
+                        self.playback_active = !self.playback_active; 
+                        if self.playback_active { self.last_frame_time = ctx.input(|i| i.time); }
+                    }
+                    
+                    // Video Navigation (Only if NO shift)
+                    if !shift {
+                        if let Some(stream) = &self.video_stream {
+                            let duration = stream.metadata.duration;
+                            let frame_duration = 1.0 / stream.metadata.fps;
+                            
+                            if k_left_p { 
+                                let mut t = self.current_time - 5.0;
+                                if t < 0.0 { t += duration; }
+                                self.seek_to(ctx, t.clamp(0.0, duration - 0.1)); 
+                            }
+                            if k_right_p { 
+                                let mut t = self.current_time + 5.0;
+                                if t >= duration { t -= duration; }
+                                self.seek_to(ctx, t.clamp(0.0, duration - 0.1)); 
+                            }
+                            if comma { 
+                                let mut t = self.current_time - frame_duration;
+                                if t < 0.0 { t += duration; }
+                                self.seek_to(ctx, t.clamp(0.0, duration - 0.1)); 
+                            }
+                            if period { 
+                                let mut t = self.current_time + frame_duration;
+                                if t >= duration { t -= duration; }
+                                self.seek_to(ctx, t.clamp(0.0, duration - 0.1)); 
+                            }
+                        }
+                    }
+
                     if k_a { self.active_tab = Tab::Adjust; self.focus = KeyboardFocus::Adjust; } 
                     if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } 
-                    let pan_speed = if shift { 50.0 } else { 10.0 };
-                    if k_up_d { self.pan_offset.y += pan_speed; }
-                    if k_down_d { self.pan_offset.y -= pan_speed; }
-                    if k_left_d { self.pan_offset.x += pan_speed; }
-                    if k_right_d { self.pan_offset.x -= pan_speed; }
+                    
+                    // Panning (Requires Shift)
+                    if shift {
+                        let pan_speed = 50.0;
+                        if k_up_d { self.pan_offset.y += pan_speed; }
+                        if k_down_d { self.pan_offset.y -= pan_speed; }
+                        if k_left_d { self.pan_offset.x += pan_speed; }
+                        if k_right_d { self.pan_offset.x -= pan_speed; }
+                    }
                 }
                 KeyboardFocus::Adjust => { if k_q { self.focus = KeyboardFocus::Light; } if k_e { self.focus = KeyboardFocus::Color; } if k_p { self.focus = KeyboardFocus::AdjustPresetMenu; self.preset_index = 0; } if k_d { self.active_tab = Tab::Dither; self.focus = KeyboardFocus::Dither; } }
                 KeyboardFocus::Light => { if k_e { self.focus = KeyboardFocus::Editing("exposure"); } if k_c { self.focus = KeyboardFocus::Editing("contrast"); } if k_h { self.focus = KeyboardFocus::Editing("highlights"); } if k_s { self.focus = KeyboardFocus::Editing("shadows"); } if k_b { self.focus = KeyboardFocus::Editing("blacks"); } if k_w { self.focus = KeyboardFocus::Editing("whites"); } if k_f { self.focus = KeyboardFocus::Editing("sharpness"); } }
@@ -667,9 +989,9 @@ impl eframe::App for VibeDitherApp {
             ui.heading("VibeDither v0.9"); ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    if ui.add(egui::Button::new("[Load Image]").frame(false)).clicked() { 
+                    if ui.add(egui::Button::new("[Load Content]").frame(false)).clicked() { 
                         if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif"])
+                            .add_filter("Content", &["png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif", "mp4", "mkv", "mov", "avi", "webm", "m4v"])
                             .pick_file() { 
                             self.load_content(ctx, path); 
                         }
@@ -1070,6 +1392,35 @@ impl eframe::App for VibeDitherApp {
 
         egui::TopBottomPanel::bottom("footer").frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(8.0)).show(ctx, |ui| {
             ui.horizontal(|ui| {
+                // Pre-extract metadata to avoid borrow conflicts
+                let metadata_info = self.video_metadata.as_ref().map(|m| (m.duration, m.fps, m.width, m.height));
+                
+                if let Some((duration, fps, width, height)) = metadata_info {
+                    let play_icon = if self.playback_active { "[ PAUSE ]" } else { "[ PLAY ]" };
+                    if ui.add(egui::Button::new(play_icon).frame(false)).clicked() {
+                        self.playback_active = !self.playback_active;
+                        if self.playback_active { self.last_frame_time = ctx.input(|i| i.time); }
+                    }
+                    
+                    let mut time = self.current_time;
+                    let slider = ui.add(egui::Slider::new(&mut time, 0.0..=duration).show_value(false).trailing_fill(true));
+                    
+                    if slider.changed() {
+                        self.seek_to(ctx, time);
+                    }
+                    
+                    fn format_time(t: f32) -> String {
+                        let total_secs = t as i32;
+                        let mins = total_secs / 60;
+                        let secs = total_secs % 60;
+                        format!("{:02}:{:02}", mins, secs)
+                    }
+                    
+                    ui.label(format!("{} / {}", format_time(self.current_time), format_time(duration)));
+                    ui.label(format!("| FPS: {:.2} | {}x{}", fps, width, height));
+                    ui.add_space(12.0);
+                }
+
                 ui.label("Zoom");
                 egui::ComboBox::from_id_source("zoom_selector")
                     .selected_text(format!("[{:.0}%]", self.zoom_factor * 100.0))
@@ -1107,26 +1458,80 @@ impl eframe::App for VibeDitherApp {
             let mut close = false;
             egui::Window::new("Export Settings").collapsible(false).resizable(false).show(ctx, |ui| {
                 ui.vertical(|ui| {
-                    ui.label("FORMAT");
-                    ui.horizontal(|ui| { 
-                        let png_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
-                        let jpg_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
-                        let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
-                        if self.focus == KeyboardFocus::Export && self.export_row == 0 {
-                            let r = match self.export_col { 0 => png_btn.rect, 1 => jpg_btn.rect, _ => webp_btn.rect };
-                            ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
-                        }
-                    });
-                    ui.separator(); ui.label("SETTINGS");
-                    if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp { 
+                                        ui.label("FORMAT");
+                                        ui.horizontal(|ui| { 
+                                            let png_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
+                                            let jpg_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
+                                            let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
+                                            let vid_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Video, "VIDEO");
+                                            
+                                            if self.focus == KeyboardFocus::Export && self.export_row == 0 {
+                                                let r = match self.export_col { 
+                                                    0 => png_btn.rect, 
+                                                    1 => jpg_btn.rect, 
+                                                    2 => webp_btn.rect,
+                                                    _ => vid_btn.rect 
+                                                };
+                                                ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                                            }
+                                        });
+                                        ui.separator(); ui.label("SETTINGS");
+                                        if self.export_settings.format == ExportFormat::Video {
+                                            ui.horizontal(|ui| {
+                                                ui.label("Container:");
+                                                ui.selectable_value(&mut self.export_settings.video_container, VideoContainer::Mp4, "MP4");
+                                                ui.selectable_value(&mut self.export_settings.video_container, VideoContainer::Mkv, "MKV");
+                                                ui.selectable_value(&mut self.export_settings.video_container, VideoContainer::Mov, "MOV");
+                                            });
+                                            ui.add(egui::Slider::new(&mut self.export_settings.video_bitrate_mbps, 1.0..=50.0).text("Bitrate (CBR Mbps)").trailing_fill(true));
+                                        } else if self.export_settings.format == ExportFormat::Jpg || self.export_settings.format == ExportFormat::Webp {
+                     
                         let q_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Quality").trailing_fill(true));
                         if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(q_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     } else {
                         let c_slider = ui.add(egui::Slider::new(&mut self.export_settings.compression, 0.0..=1.0).text("Compression (File Size)").trailing_fill(true));
                         if self.focus == KeyboardFocus::Export && self.export_row == 1 { ui.painter().rect_stroke(c_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
                     }
-                    let t_check = ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
-                    if self.focus == KeyboardFocus::Export && self.export_row == 2 { ui.painter().rect_stroke(t_check.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
+
+                    if self.export_settings.format != ExportFormat::Video {
+                        let t_check = ui.add_enabled(self.export_settings.format != ExportFormat::Jpg, egui::Checkbox::new(&mut self.export_settings.transparency, "Enable Transparency"));
+                        if self.focus == KeyboardFocus::Export && self.export_row == 2 { ui.painter().rect_stroke(t_check.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
+                    } else {
+                        ui.separator();
+                        ui.label("AUDIO");
+                        ui.checkbox(&mut self.export_settings.export_audio, "Include Audio");
+                        if self.export_settings.export_audio {
+                            ui.horizontal(|ui| {
+                                ui.selectable_value(&mut self.export_settings.audio_codec, AudioCodec::Aac, "AAC");
+                                ui.selectable_value(&mut self.export_settings.audio_codec, AudioCodec::Mp3, "MP3");
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Bitrate:");
+                                let bitrates = [24, 46, 48, 64, 72, 96, 124];
+                                egui::ComboBox::from_id_source("audio_bitrate_combo")
+                                    .selected_text(format!("{} kbps", self.export_settings.audio_bitrate_kbps))
+                                    .show_ui(ui, |ui| {
+                                        for &b in &bitrates {
+                                            ui.selectable_value(&mut self.export_settings.audio_bitrate_kbps, b, format!("{} kbps", b));
+                                        }
+                                    });
+                            });
+
+                            ui.horizontal(|ui| {
+                                ui.label("Sample Rate:");
+                                let sample_rates = [4000, 8000, 12000, 16000, 20000, 24000, 36000, 44100, 48000, 96000];
+                                egui::ComboBox::from_id_source("audio_hz_combo")
+                                    .selected_text(format!("{} Hz", self.export_settings.audio_sample_rate_hz))
+                                    .show_ui(ui, |ui| {
+                                        for &sr in &sample_rates {
+                                            let label = if sr >= 1000 && sr != 44100 { format!("{}k Hz", sr / 1000) } else { format!("{} Hz", sr) };
+                                            ui.selectable_value(&mut self.export_settings.audio_sample_rate_hz, sr, label);
+                                        }
+                                    });
+                            });
+                        }
+                    }
                     
                     ui.separator(); ui.horizontal(|ui| { 
                         ui.label("SIZE"); 
@@ -1161,7 +1566,15 @@ impl eframe::App for VibeDitherApp {
                             let r = if self.export_col == 0 { c_btn.rect } else { e_btn.rect };
                             ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
                         }
-                        if c_btn.clicked() { close = true; } if e_btn.clicked() { self.export_image(); close = true; } 
+                        if c_btn.clicked() { close = true; } 
+                        if e_btn.clicked() { 
+                            if self.export_settings.format == ExportFormat::Video {
+                                self.export_video();
+                            } else {
+                                self.export_image(); 
+                            }
+                            close = true; 
+                        } 
                     });
                 });
             });

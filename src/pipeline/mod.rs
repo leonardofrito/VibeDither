@@ -402,6 +402,31 @@ impl Pipeline {
         texture
     }
 
+    pub fn update_input_texture(&self, queue: &wgpu::Queue, texture: &wgpu::Texture, img: &image::DynamicImage) {
+        let rgba = img.to_rgba8();
+        let dimensions = img.dimensions();
+
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
+            },
+            wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     pub fn render(
         &self,
         device: &wgpu::Device,
