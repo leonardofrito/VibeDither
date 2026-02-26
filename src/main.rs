@@ -157,11 +157,18 @@ impl VibeDitherApp {
                         fps: stream.metadata.fps,
                         duration: stream.metadata.duration,
                     });
+                    
+                    // Initialize export resolution BEFORE move
+                    self.export_settings.width_px = stream.metadata.width;
+                    self.export_settings.height_px = stream.metadata.height;
+                    self.export_settings.percentage = 1.0;
+
                     self.video_stream = Some(stream);
                     self.current_video_path = Some(path.clone());
                     self.playback_active = true;
                     self.current_time = 0.0;
                     self.last_frame_time = _ctx.input(|i| i.time);
+                    
                     // Still load the first frame immediately for the UI
                     if let Ok(img) = video_io::load_first_frame(&path) {
                         self.load_image_to_gpu(_ctx, img);
@@ -473,7 +480,12 @@ impl VibeDitherApp {
         
         if let Some(img_buf) = self.read_back_image(&output_tex) {
             let mut dimg = image::DynamicImage::ImageRgba8(img_buf);
-            if dimg.width() != self.export_settings.width_px || dimg.height() != self.export_settings.height_px { dimg = dimg.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest); }
+            
+            // Resize to target resolution using Nearest Neighbor
+            if dimg.width() != self.export_settings.width_px || dimg.height() != self.export_settings.height_px {
+                dimg = dimg.resize_exact(self.export_settings.width_px, self.export_settings.height_px, image::imageops::FilterType::Nearest);
+            }
+            
             if !self.export_settings.transparency || self.export_settings.format == ExportFormat::Jpg { dimg = image::DynamicImage::ImageRgb8(dimg.to_rgb8()); }
             let (ext, filt) = match self.export_settings.format { ExportFormat::Png => ("png", "PNG"), ExportFormat::Jpg => ("jpg", "JPEG"), ExportFormat::Webp => ("webp", "WEBP"), ExportFormat::Video => ("mp4", "MP4") };
             let d_names = ["None", "Threshold", "Random", "Bayer", "BlueNoise", "DiffusionApprox", "Stucki", "Atkinson", "GradientBased", "LatticeBoltzmann"];
@@ -527,6 +539,7 @@ impl VibeDitherApp {
             "-i", path.to_str().unwrap(),
             "-f", "rawvideo",
             "-pix_fmt", "rgba",
+            "-color_range", "pc",
             "-"
         ])
         .stdout(std::process::Stdio::piped())
@@ -541,32 +554,38 @@ impl VibeDitherApp {
         let mut encoder_args = vec![
             "-f".to_string(), "rawvideo".to_string(),
             "-pixel_format".to_string(), "rgba".to_string(),
-            "-video_size".to_string(), format!("{}x{}", out_w, out_h),
+            "-video_size".to_string(), format!("{}x{}", meta.width, meta.height),
             "-framerate".to_string(), meta.fps.to_string(),
-            "-i".to_string(), "-".to_string(), // Input 0: processed video frames from pipe
+            "-color_range".to_string(), "pc".to_string(), // Input is full-range RGBA
+            "-i".to_string(), "-".to_string(),
         ];
 
         if self.export_settings.export_audio {
-            // Input 1: Original file for audio
             encoder_args.extend(["-i".to_string(), path.to_str().unwrap().to_string()]);
             encoder_args.extend(["-c:a".to_string(), match self.export_settings.audio_codec { AudioCodec::Aac => "aac", AudioCodec::Mp3 => "libmp3lame" }.to_string()]);
             encoder_args.extend(["-b:a".to_string(), format!("{}k", self.export_settings.audio_bitrate_kbps)]);
             encoder_args.extend(["-ar".to_string(), self.export_settings.audio_sample_rate_hz.to_string()]);
-            // Map video from pipe (0:v) and audio from original file (1:a)
             encoder_args.extend(["-map".to_string(), "0:v".to_string(), "-map".to_string(), "1:a".to_string()]);
-            // Ensure audio doesn't outlast video
             encoder_args.extend(["-shortest".to_string()]);
         } else {
             encoder_args.push("-an".to_string());
         }
 
         encoder_args.extend([
+            "-vf".to_string(), format!("scale={}:{}:flags=neighbor+full_chroma_int+accurate_rnd:in_range=pc:out_range=tv", out_w, out_h), // Explicit range conversion
             "-c:v".to_string(), "libx264".to_string(),
+            "-preset".to_string(), "medium".to_string(),
+            "-tune".to_string(), "grain".to_string(), // Better for dithered patterns
+            "-x264-params".to_string(), "colorprim=bt709:transfer=bt709:colormatrix=bt709:fullrange=off".to_string(),
             "-pix_fmt".to_string(), "yuv420p".to_string(),
+            "-color_range".to_string(), "tv".to_string(), // Standard for yuv420p
+            "-colorspace".to_string(), "bt709".to_string(),
+            "-color_primaries".to_string(), "bt709".to_string(),
+            "-color_trc".to_string(), "bt709".to_string(),
             "-b:v".to_string(), bitrate.clone(),
             "-maxrate".to_string(), bitrate.clone(),
             "-bufsize".to_string(), bitrate,
-            "-y".to_string(), // Overwrite
+            "-y".to_string(),
             out_path.to_str().unwrap().to_string()
         ]);
 
@@ -1543,14 +1562,44 @@ impl eframe::App for VibeDitherApp {
                         }
                     });
                     if self.export_settings.use_percentage { 
+                        let old_p = self.export_settings.percentage;
                         let s_slider = ui.add(egui::Slider::new(&mut self.export_settings.percentage, 0.1..=5.0).text("Scale").trailing_fill(true));
                         if self.focus == KeyboardFocus::Export && self.export_row == 4 { ui.painter().rect_stroke(s_slider.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0))); }
+                        
+                        if s_slider.changed() || old_p != self.export_settings.percentage {
+                            // Update pixels based on percentage
+                            let (orig_w, orig_h) = if let Some(m) = &self.video_metadata {
+                                (m.width, m.height)
+                            } else if let Some(img) = &self.current_image {
+                                (img.width(), img.height())
+                            } else { (1920, 1080) };
+
+                            self.export_settings.width_px = (orig_w as f32 * self.export_settings.percentage) as u32;
+                            self.export_settings.height_px = (orig_h as f32 * self.export_settings.percentage) as u32;
+                        }
                     } else {
                         ui.horizontal(|ui| {
+                            let (orig_w, orig_h) = if let Some(m) = &self.video_metadata {
+                                (m.width, m.height)
+                            } else if let Some(img) = &self.current_image {
+                                (img.width(), img.height())
+                            } else { (1920, 1080) };
+
                             let mut w = self.export_settings.width_px; let mut h = self.export_settings.height_px;
+                            
                             let w_drag = ui.add(egui::DragValue::new(&mut w).clamp_range(1..=16384).prefix("W: "));
+                            if w_drag.changed() && self.export_settings.link_aspect {
+                                h = (w as f32 * (orig_h as f32 / orig_w as f32)) as u32;
+                            }
+
                             let link_btn = ui.add(egui::Button::new(if self.export_settings.link_aspect { "🔗" } else { "🔓" }).frame(false));
+                            if link_btn.clicked() { self.export_settings.link_aspect = !self.export_settings.link_aspect; }
+
                             let h_drag = ui.add(egui::DragValue::new(&mut h).clamp_range(1..=16384).prefix("H: "));
+                            if h_drag.changed() && self.export_settings.link_aspect {
+                                w = (h as f32 * (orig_w as f32 / orig_h as f32)) as u32;
+                            }
+
                             if self.focus == KeyboardFocus::Export && self.export_row == 4 {
                                 let r = match self.export_col { 0 => w_drag.rect, 1 => link_btn.rect, _ => h_drag.rect };
                                 ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));

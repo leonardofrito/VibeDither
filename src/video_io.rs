@@ -83,7 +83,7 @@ pub fn spawn_video_stream(path: PathBuf, start_time: f32, existing_metadata: Opt
             .input(path.to_str().unwrap())
             .format("rawvideo")
             .pix_fmt("rgba")
-            .args(["-"])
+            .args(["-color_range", "pc", "-"])
             .print_command();
 
         if let Ok(mut child) = command.spawn() {
