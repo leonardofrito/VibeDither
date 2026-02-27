@@ -103,6 +103,8 @@ struct VibeDitherApp {
     current_time: f32,
     pending_seek_time: Option<f32>,
     last_seek_input_time: f64,
+    export_progress: f32,
+    is_exporting: bool,
 }
 
 impl VibeDitherApp {
@@ -134,6 +136,7 @@ impl VibeDitherApp {
             preset_index: 0,
             video_stream: None, video_metadata: None, current_video_path: None, playback_active: false, last_frame_time: 0.0, current_time: 0.0,
             pending_seek_time: None, last_seek_input_time: 0.0,
+            export_progress: 0.0, is_exporting: false,
         };
         app.load_presets();
         app
@@ -162,6 +165,7 @@ impl VibeDitherApp {
                     self.export_settings.width_px = stream.metadata.width;
                     self.export_settings.height_px = stream.metadata.height;
                     self.export_settings.percentage = 1.0;
+                    self.export_settings.format = ExportFormat::Video;
 
                     self.video_stream = Some(stream);
                     self.current_video_path = Some(path.clone());
@@ -185,6 +189,7 @@ impl VibeDitherApp {
                     self.current_video_path = None;
                     self.playback_active = false;
                     self.current_time = 0.0;
+                    self.export_settings.format = ExportFormat::Png;
                     self.load_image_to_gpu(_ctx, img)
                 },
                 Err(e) => log::error!("load_content: Failed to load image: {}", e),
@@ -434,8 +439,25 @@ impl VibeDitherApp {
         }
     }
 
-    fn reset_adjustments(&mut self) {
-        self.settings = ColorSettings::default(); 
+    fn reset_light(&mut self) {
+        self.settings.exposure = 0.0;
+        self.settings.contrast = 1.0;
+        self.settings.highlights = 0.0;
+        self.settings.shadows = 0.0;
+        self.settings.whites = 0.0;
+        self.settings.blacks = 0.0;
+        self.settings.brightness = 0.0;
+    }
+
+    fn reset_color(&mut self) {
+        self.settings.temperature = 0.0;
+        self.settings.tint = 0.0;
+        self.settings.saturation = 1.0;
+        self.settings.vibrance = 0.0;
+        self.settings.sharpness = 0.0;
+    }
+
+    fn reset_curves(&mut self) {
         self.curve_points = [
             vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
             vec![egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)],
@@ -445,19 +467,16 @@ impl VibeDitherApp {
         self.selected_curve_idx = 0;
         let lut = spline::interpolate_spline(&self.curve_points[0]);
         for i in 0..256 { self.curves_data[i * 4] = lut[i]; self.curves_data[i * 4 + 1] = lut[i]; self.curves_data[i * 4 + 2] = lut[i]; self.curves_data[i * 4 + 3] = 255; }
-        self.gradient_stops = vec![GradientStop { id: 0, pos: 0.0, color: egui::Color32::BLACK }, GradientStop { id: 1, pos: 1.0, color: egui::Color32::WHITE }];
-        self.selected_stop_id = Some(0); self.next_stop_id = 2; Self::generate_gradient_data(&self.gradient_stops, &mut self.gradient_data);
-        if let (Some(q), Some(device)) = (&self.queue, &self.device) {
-            self.pipeline.update_curves(q, &self.curves_data); self.pipeline.update_gradient(q, &self.gradient_data);
-            if let (Some(input), Some(output)) = (&self.input_texture, &self.output_texture) {
-                self.pipeline.render(device, q, &input.create_view(&wgpu::TextureViewDescriptor::default()), &output.create_view(&wgpu::TextureViewDescriptor::default()), &self.settings);
-            }
-        }
+        if let Some(q) = &self.queue { self.pipeline.update_curves(q, &self.curves_data); }
     }
 
     fn load_image_to_gpu(&mut self, _ctx: &egui::Context, img: DynamicImage) {
         log::debug!("load_image_to_gpu called for image ({}x{})", img.width(), img.height());
-        self.reset_adjustments();
+        
+        self.reset_light();
+        self.reset_color();
+        self.reset_curves();
+
         let Some(device) = self.device.clone() else { return };
         let Some(queue) = self.queue.clone() else { return };
         let Some(renderer) = self.renderer.clone() else { return };
@@ -515,7 +534,7 @@ impl VibeDitherApp {
         }
     }
 
-    fn export_video(&mut self) {
+    fn export_video(&mut self, ctx: &egui::Context) {
         let (Some(device), Some(queue), Some(path), Some(meta)) = (&self.device, &self.queue, &self.current_video_path, &self.video_metadata) else { return };
         
         let (ext, filt) = match self.export_settings.video_container {
@@ -529,12 +548,17 @@ impl VibeDitherApp {
 
         log::info!("export_video: Starting export to {:?}", out_path);
 
-        let out_w = self.export_settings.width_px;
-        let out_h = self.export_settings.height_px;
+        let out_w = (self.export_settings.width_px / 2) * 2;
+        let out_h = (self.export_settings.height_px / 2) * 2;
         let bitrate = format!("{}M", self.export_settings.video_bitrate_mbps);
 
         // 1. Setup Source Decoder (Fastest possible decode)
         let mut decoder_cmd = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            decoder_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         decoder_cmd.args([
             "-i", path.to_str().unwrap(),
             "-f", "rawvideo",
@@ -550,11 +574,16 @@ impl VibeDitherApp {
 
         // 2. Setup Destination Encoder
         let mut encoder_cmd = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            encoder_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
         
         let mut encoder_args = vec![
             "-f".to_string(), "rawvideo".to_string(),
             "-pixel_format".to_string(), "rgba".to_string(),
-            "-video_size".to_string(), format!("{}x{}", meta.width, meta.height),
+            "-video_size".to_string(), format!("{}x{}", out_w, out_h),
             "-framerate".to_string(), meta.fps.to_string(),
             "-color_range".to_string(), "pc".to_string(), // Input is full-range RGBA
             "-i".to_string(), "-".to_string(),
@@ -572,7 +601,7 @@ impl VibeDitherApp {
         }
 
         encoder_args.extend([
-            "-vf".to_string(), format!("scale={}:{}:flags=neighbor+full_chroma_int+accurate_rnd:in_range=pc:out_range=tv", out_w, out_h), // Explicit range conversion
+            "-vf".to_string(), format!("scale={}:{}:flags=neighbor+full_chroma_int+accurate_rnd:in_range=pc:out_range=tv", out_w, out_h), 
             "-c:v".to_string(), "libx264".to_string(),
             "-preset".to_string(), "medium".to_string(),
             "-tune".to_string(), "grain".to_string(), // Better for dithered patterns
@@ -621,6 +650,12 @@ impl VibeDitherApp {
         use std::io::{Read, Write};
         
         log::info!("export_video: Entering frame loop...");
+        self.is_exporting = true;
+        self.export_progress = 0.0;
+        
+        let total_frames = (meta.duration * meta.fps) as usize;
+        let mut current_frame = 0;
+
         while decoder_stdout.read_exact(&mut buffer).is_ok() {
             // Upload to GPU
             queue.write_texture(
@@ -639,9 +674,20 @@ impl VibeDitherApp {
                     break;
                 }
             }
+
+            current_frame += 1;
+            if total_frames > 0 {
+                self.export_progress = (current_frame as f32 / total_frames as f32).min(1.0);
+            }
+            ctx.request_repaint();
         }
 
         log::info!("export_video: Export finished.");
+        self.is_exporting = false;
+        self.export_progress = 1.0;
+        self.show_export_window = false;
+        self.focus = KeyboardFocus::Main;
+
         drop(encoder_stdin);
         let _ = encoder_child.wait();
         let _ = decoder_child.kill();
@@ -674,6 +720,7 @@ impl eframe::App for VibeDitherApp {
         }
 
         if !ctx.wants_keyboard_input() {
+            let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
             if ctrl && k_s { self.focus = KeyboardFocus::Export; self.show_export_window = true; }
             if ctrl && k_o {
                 if let Some(path) = rfd::FileDialog::new()
@@ -693,7 +740,10 @@ impl eframe::App for VibeDitherApp {
                 }
             }
 
-            for (idx, &pressed) in keys_0_9.iter().enumerate() { if pressed && self.focus == KeyboardFocus::Main { self.zoom_factor = match idx { 1 => 1.0, 0 => 0.1, 2 => 2.0, 3 => 4.0, 4 => 8.0, 5 => 12.0, 6 => 16.0, 7 => 20.0, 8 => 24.0, 9 => 32.0, _ => self.zoom_factor }; self.fit_to_screen = false; self.pan_offset = egui::Vec2::ZERO; } }
+            if keys_0_9[1] { self.zoom_factor = (self.zoom_factor / 1.1).clamp(0.1, 32.0); self.fit_to_screen = false; }
+            if keys_0_9[2] { self.zoom_factor = (self.zoom_factor * 1.1).clamp(0.1, 32.0); self.fit_to_screen = false; }
+            if keys_0_9[3] { self.zoom_factor = 1.0; self.fit_to_screen = false; self.pan_offset = egui::Vec2::ZERO; }
+            if keys_0_9[4] { self.fit_to_screen = true; self.pan_offset = egui::Vec2::ZERO; }
 
             if esc {
                 self.focus = match self.focus {
@@ -778,7 +828,7 @@ impl eframe::App for VibeDitherApp {
                 }
                 KeyboardFocus::BitDepthMenu => { 
                     if k_b_real { self.focus = KeyboardFocus::Dither; }
-                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                    let delta = if k_right_p || k_up_p || k_d || k_w { 1.0 } else if k_left_p || k_down_p || k_a || k_s { -1.0 } else { 0.0 };
                     if delta != 0.0 {
                         let now = ctx.input(|i| i.time);
                         if now - self.last_edit_time > 0.1 {
@@ -788,25 +838,41 @@ impl eframe::App for VibeDitherApp {
                     }
                     if esc { self.focus = KeyboardFocus::Dither; }
                 }
-                KeyboardFocus::BayerSizeMenu => { let mut sz = None; if keys_0_9[2] { sz = Some(2.0); } if keys_0_9[3] { sz = Some(3.0); } if keys_0_9[4] { sz = Some(4.0); } if keys_0_9[8] { sz = Some(8.0); } if let Some(s) = sz { self.settings.bayer_size = s; self.focus = KeyboardFocus::Dither; changed = true; } }
+                KeyboardFocus::BayerSizeMenu => { 
+                    let delta = if k_right_p || k_up_p || k_d || k_w { 1 } else if k_left_p || k_down_p || k_a || k_s { -1 } else { 0 };
+                    if delta != 0 {
+                        let now = ctx.input(|i| i.time);
+                        if now - self.last_edit_time > 0.15 {
+                            let sizes = [2.0, 3.0, 4.0, 8.0];
+                            let current = self.settings.bayer_size;
+                            let idx = sizes.iter().position(|&s| s == current).unwrap_or(3);
+                            let new_idx = if delta > 0 { (idx + 1) % 4 } else { (idx + 3) % 4 };
+                            self.settings.bayer_size = sizes[new_idx];
+                            self.last_edit_time = now;
+                            changed = true;
+                        }
+                    }
+
+                    if enter || space || esc { self.focus = KeyboardFocus::Dither; }
+                }
                 KeyboardFocus::GradientMapMenu => {
                     if k_e { self.settings.grad_enabled = if self.settings.grad_enabled > 0.5 { 0.0 } else { 1.0 }; changed = true; }
                     if k_g { self.focus = KeyboardFocus::Dither; }
                     if k_p { self.focus = KeyboardFocus::PalettePresetMenu; self.preset_index = 0; }
                     let now = ctx.input(|i| i.time);
                     if now - self.last_edit_time > 0.166 {
-                        if k_left_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
-                        if k_right_p { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
+                        if k_left_p || k_a { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx > 0 { self.selected_stop_id = Some(self.gradient_stops[idx-1].id); self.last_edit_time = now; } } } }
+                        if k_right_p || k_d { if let Some(id) = self.selected_stop_id { if let Some(idx) = self.gradient_stops.iter().position(|s| s.id == id) { if idx < self.gradient_stops.len() - 1 { self.selected_stop_id = Some(self.gradient_stops[idx+1].id); self.last_edit_time = now; } } } }
                     }
-                    if space { self.focus = KeyboardFocus::GradientPointEdit; }
+                    if space || enter { self.focus = KeyboardFocus::GradientPointEdit; }
                     if esc { self.focus = KeyboardFocus::Dither; }
                 }
                 KeyboardFocus::AdjustPresetMenu => {
                     if k_p || esc { self.focus = KeyboardFocus::Adjust; }
                     let n = self.adjust_presets.len() + 1; // +1 for [None]
-                    if k_up_p { self.preset_index = self.preset_index.saturating_sub(1); }
-                    if k_down_p { self.preset_index = (self.preset_index + 1).min(n - 1); }
-                    if space {
+                    if k_up_p || k_w { self.preset_index = self.preset_index.saturating_sub(1); }
+                    if k_down_p || k_s { self.preset_index = (self.preset_index + 1).min(n - 1); }
+                    if space || enter {
                         if self.preset_index == 0 { self.selected_adjust_preset = None; }
                         else if let Some(p) = self.adjust_presets.get(self.preset_index - 1) {
                             let name = p.name.clone();
@@ -819,9 +885,9 @@ impl eframe::App for VibeDitherApp {
                 KeyboardFocus::PalettePresetMenu => {
                     if k_p || esc { self.focus = KeyboardFocus::GradientMapMenu; }
                     let n = self.gradient_presets.len() + 1;
-                    if k_up_p { self.preset_index = self.preset_index.saturating_sub(1); }
-                    if k_down_p { self.preset_index = (self.preset_index + 1).min(n - 1); }
-                    if space {
+                    if k_up_p || k_w { self.preset_index = self.preset_index.saturating_sub(1); }
+                    if k_down_p || k_s { self.preset_index = (self.preset_index + 1).min(n - 1); }
+                    if space || enter {
                         if self.preset_index == 0 { self.selected_gradient_preset = None; }
                         else if let Some(p) = self.gradient_presets.get(self.preset_index - 1) {
                             let name = p.name.clone();
@@ -869,7 +935,7 @@ impl eframe::App for VibeDitherApp {
                             _ => if self.active_tab == Tab::Adjust { KeyboardFocus::Adjust } else { KeyboardFocus::Dither },
                         };
                     }
-                    let delta = if k_right_p || k_up_p { 1.0 } else if k_left_p || k_down_p { -1.0 } else { 0.0 };
+                    let delta = if k_right_p || k_up_p || k_d || k_w { 1.0 } else if k_left_p || k_down_p || k_a || k_s { -1.0 } else { 0.0 };
                     if delta != 0.0 {
                         let now = ctx.input(|i| i.time);
                         if now - self.last_edit_time > 0.166 {
@@ -898,42 +964,55 @@ impl eframe::App for VibeDitherApp {
                     }
                 }
                 KeyboardFocus::Export => {
-                    if k_up_p { self.export_row = self.export_row.saturating_sub(1); }
-                    if k_down_p { self.export_row = (self.export_row + 1).min(5); }
-                    if k_left_p { self.export_col = self.export_col.saturating_sub(1); }
-                    if k_right_p { self.export_col = (self.export_col + 1).min(2); }
-                    if space {
+                    if k_up_p || k_w { self.export_row = self.export_row.saturating_sub(1); }
+                    if k_down_p || k_s { self.export_row = (self.export_row + 1).min(5); }
+                    if k_left_p || k_a { self.export_col = self.export_col.saturating_sub(1); }
+                    if k_right_p || k_d { self.export_col = (self.export_col + 1).min(2); }
+                    if space || enter {
                         match (self.export_row, self.export_col) {
-                            (0, 0) => self.export_settings.format = ExportFormat::Png,
-                            (0, 1) => self.export_settings.format = ExportFormat::Jpg,
-                            (0, 2) => self.export_settings.format = ExportFormat::Webp,
-                            (2, _) => if self.export_settings.format != ExportFormat::Jpg { self.export_settings.transparency = !self.export_settings.transparency; },
+                            (0, 0) => if self.video_stream.is_none() { self.export_settings.format = ExportFormat::Png; } else { self.export_settings.format = ExportFormat::Video; },
+                            (0, 1) => if self.video_stream.is_none() { self.export_settings.format = ExportFormat::Jpg; },
+                            (0, 2) => if self.video_stream.is_none() { self.export_settings.format = ExportFormat::Webp; },
+                            (2, _) => if self.export_settings.format != ExportFormat::Video && self.export_settings.format != ExportFormat::Jpg { self.export_settings.transparency = !self.export_settings.transparency; },
                             (3, 0) => self.export_settings.use_percentage = true,
                             (3, 1) => self.export_settings.use_percentage = false,
                             (4, 1) => self.export_settings.link_aspect = !self.export_settings.link_aspect,
                             (5, 0) => { self.show_export_window = false; self.focus = KeyboardFocus::Main; },
-                            (5, 1) => { self.export_image(); self.show_export_window = false; self.focus = KeyboardFocus::Main; },
+                            (5, 1) => { 
+                                if self.export_settings.format == ExportFormat::Video {
+                                    self.export_video(ctx);
+                                } else {
+                                    self.export_image(); 
+                                }
+                                self.show_export_window = false; 
+                                self.focus = KeyboardFocus::Main; 
+                            },
                             _ => {}
                         }
                     }
                     let now = ctx.input(|i| i.time);
                     if now - self.last_edit_time > 0.1 {
-                        let delta = if k_right_p { 1.0 } else if k_left_p { -1.0 } else { 0.0 };
+                        let delta = if k_right_p || k_d { 1.0 } else if k_left_p || k_a { -1.0 } else { 0.0 };
                         if delta != 0.0 {
                             match self.export_row {
                                 1 => self.export_settings.compression = (self.export_settings.compression + delta * 0.05).clamp(0.0, 1.0),
                                 4 => if self.export_settings.use_percentage {
                                     self.export_settings.percentage = (self.export_settings.percentage + delta * 0.1).clamp(0.1, 5.0);
-                                    if let Some(img) = &self.current_image {
-                                        self.export_settings.width_px = (img.width() as f32 * self.export_settings.percentage) as u32;
-                                        self.export_settings.height_px = (img.height() as f32 * self.export_settings.percentage) as u32;
-                                    }
+                                    let (orig_w, orig_h) = if let Some(m) = &self.video_metadata { (m.width, m.height) } else if let Some(img) = &self.current_image { (img.width(), img.height()) } else { (1920, 1080) };
+                                    self.export_settings.width_px = (orig_w as f32 * self.export_settings.percentage) as u32;
+                                    self.export_settings.height_px = (orig_h as f32 * self.export_settings.percentage) as u32;
                                 } else if self.export_col == 0 {
                                     self.export_settings.width_px = (self.export_settings.width_px as f32 + delta * 10.0).clamp(1.0, 16384.0) as u32;
-                                    if self.export_settings.link_aspect { if let Some(img) = &self.current_image { self.export_settings.height_px = (self.export_settings.width_px as f32 * (img.height() as f32 / img.width() as f32)) as u32; } }
+                                    if self.export_settings.link_aspect { 
+                                        let (orig_w, orig_h) = if let Some(m) = &self.video_metadata { (m.width, m.height) } else if let Some(img) = &self.current_image { (img.width(), img.height()) } else { (1920, 1080) };
+                                        self.export_settings.height_px = (self.export_settings.width_px as f32 * (orig_h as f32 / orig_w as f32)) as u32; 
+                                    }
                                 } else if self.export_col == 2 {
                                     self.export_settings.height_px = (self.export_settings.height_px as f32 + delta * 10.0).clamp(1.0, 16384.0) as u32;
-                                    if self.export_settings.link_aspect { if let Some(img) = &self.current_image { self.export_settings.width_px = (self.export_settings.height_px as f32 * (img.width() as f32 / img.height() as f32)) as u32; } }
+                                    if self.export_settings.link_aspect { 
+                                        let (orig_w, orig_h) = if let Some(m) = &self.video_metadata { (m.width, m.height) } else if let Some(img) = &self.current_image { (img.width(), img.height()) } else { (1920, 1080) };
+                                        self.export_settings.width_px = (self.export_settings.height_px as f32 * (orig_w as f32 / orig_h as f32)) as u32; 
+                                    }
                                 },
                                 _ => {}
                             }
@@ -979,11 +1058,11 @@ impl eframe::App for VibeDitherApp {
 
                 let d_type = self.settings.dither_type as i32;
                 let shortcut_text = match self.focus {
-                    KeyboardFocus::Main => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                    KeyboardFocus::Main => "Esc:Back  Ctrl+S:Export  1-4:Zoom    |    A:Adjust  D:Dither",
                     KeyboardFocus::Adjust => "Q:Light  E:Color  P:Presets  Esc:Back",
                     KeyboardFocus::Light => "E:Exp C:Cont H:High S:Shad B:Black W:White F:Sharp Esc:Back",
                     KeyboardFocus::Color => "T:Temp E:Tint S:Sat V:Vib F:Sharp Esc:Back",
-                    KeyboardFocus::AdjustPresetMenu => "ARROWS:Select  Space:Apply  P/Esc:Back",
+                    KeyboardFocus::AdjustPresetMenu => "WASD/Arrows:Select  Enter/Space:Apply  P/Esc:Back",
                     KeyboardFocus::Dither => {
                         if d_type == 1 || d_type == 3 {
                             "M:Mode S:Scale B:Bits T:Thresh F:Bayer C:Color G:Pal Esc:Back"
@@ -991,21 +1070,21 @@ impl eframe::App for VibeDitherApp {
                             "M:Mode S:Scale B:Bits C:Color G:Pal Esc:Back"
                         }
                     },
-                    KeyboardFocus::BitDepthMenu => "ARROWS:Change Bits Esc:Back",
-                    KeyboardFocus::BayerSizeMenu => "2,3,4,8:Size  Esc:Back",
-                    KeyboardFocus::GradientMapMenu => "E:Toggle  P:Presets  Space:Edit  G/Esc:Back",
-                    KeyboardFocus::PalettePresetMenu => "ARROWS:Select  Space:Apply  P/Esc:Back",
-                    KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
-                    KeyboardFocus::Editing(_) => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
-                    KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt",
-                    _ => "Esc:Back  Ctrl+S:Export  0-9:Zoom    |    A:Adjust  D:Dither",
+                    KeyboardFocus::BitDepthMenu => "WASD/Arrows:Change Bits Esc:Back",
+                    KeyboardFocus::BayerSizeMenu => "WASD/Arrows:Size  Esc:Back",
+                    KeyboardFocus::GradientMapMenu => "WASD/Arrows:Move E:Toggle P:Presets Enter/Space:Edit G/Esc:Back",
+                    KeyboardFocus::PalettePresetMenu => "WASD/Arrows:Select Enter/Space:Apply P/Esc:Back",
+                    KeyboardFocus::GradientPointEdit => "Esc:Back  Ctrl+S:Export  1-4:Zoom    |    RTY/FGH: HSB +/-   A/D:Move  Shift:Fine  Space:Done",
+                    KeyboardFocus::Editing(_) => "Esc:Back  Ctrl+S:Export  1-4:Zoom    |    WASD/Arrows:Change  Shift:Fast  Space:Ok",
+                    KeyboardFocus::ModeSelection => "Esc:Back  Ctrl+S:Export  1-4:Zoom    |    A:None S:Thres D:Rand F:Bayer G:Blue H:Diff J:Stuck K:Atkin L:Grad C:Latt",
+                    _ => "Esc:Back  Ctrl+S:Export  1-4:Zoom    |    A:Adjust  D:Dither",
                 };
                 ui.label(shortcut_text);
             });
         });
 
         egui::SidePanel::left("control_panel").resizable(true).default_width(320.0).frame(egui::Frame::none().fill(egui::Color32::BLACK).inner_margin(12.0)).show(ctx, |ui| {
-            ui.heading("VibeDither v0.9"); ui.add_space(8.0);
+            ui.heading("VibeDither v1.1"); ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     if ui.add(egui::Button::new("[Load Content]").frame(false)).clicked() { 
@@ -1017,7 +1096,7 @@ impl eframe::App for VibeDitherApp {
                     }
                     if ui.add(egui::Button::new("[Paste]").frame(false)).clicked() { if let Some(img) = image_io::get_clipboard_image() { self.load_image_to_gpu(ctx, img); } }
                 });
-                if ui.add(egui::Button::new("[Export Image]").frame(false)).clicked() { self.show_export_window = true; self.focus = KeyboardFocus::Export; }
+                if ui.add(egui::Button::new("[Export Content]").frame(false)).clicked() { self.show_export_window = true; self.focus = KeyboardFocus::Export; }
                 
                 ui.add_space(10.0);
                 ui.horizontal(|ui| { 
@@ -1031,7 +1110,7 @@ impl eframe::App for VibeDitherApp {
                 match self.active_tab {
                     Tab::Adjust => {
                         if self.focus == KeyboardFocus::AdjustPresetMenu {
-                            ui.label("--- SELECT PRESET [Arrows/Space] ---");
+                            ui.label("--- SELECT PRESET [WASD/Space] ---");
                             let mut to_apply = None;
                             if ui.selectable_label(self.preset_index == 0, "[None]").clicked() { self.selected_adjust_preset = None; self.focus = KeyboardFocus::Adjust; side_changed = true; }
                             for (i, preset) in self.adjust_presets.iter().enumerate() {
@@ -1088,7 +1167,7 @@ impl eframe::App for VibeDitherApp {
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.blacks, -1.0..=1.0).text("Blacks").trailing_fill(true)).changed();
                         });
                         ui.add_space(4.0);
-                        if ui.add(egui::Button::new("[Reset]").frame(false)).clicked() { self.settings = ColorSettings::default(); side_changed = true; }
+                        if ui.add(egui::Button::new("[Reset]").frame(false)).clicked() { self.reset_light(); side_changed = true; }
 
                         ui.add_space(8.0);
                         ui.label("------------ [ Color ] ------------"); ui.add_space(4.0);
@@ -1100,7 +1179,7 @@ impl eframe::App for VibeDitherApp {
                             side_changed |= ui.add(egui::Slider::new(&mut self.settings.sharpness, 0.0..=2.0).text("Sharpness").trailing_fill(true)).changed();
                         });
                         ui.add_space(4.0);
-                        if ui.add(egui::Button::new("[Reset]").frame(false)).clicked() { self.settings = ColorSettings::default(); side_changed = true; }
+                        if ui.add(egui::Button::new("[Reset]").frame(false)).clicked() { self.reset_color(); side_changed = true; }
                         
                         ui.add_space(8.0);
                         ui.label("------------ [ Curves ] -----------"); ui.add_space(4.0);
@@ -1342,13 +1421,22 @@ impl eframe::App for VibeDitherApp {
                             });
 
                             if self.focus == KeyboardFocus::PalettePresetMenu {
-                                ui.label("--- SELECT PALETTE [Arrows/Space] ---");
+                                ui.label("--- SELECT PALETTE [WASD/Space] ---");
                                 let mut to_apply = None;
                                 if ui.selectable_label(self.preset_index == 0, "[None]").clicked() { self.selected_gradient_preset = None; self.focus = KeyboardFocus::GradientMapMenu; side_changed = true; }
                                 for (i, preset) in self.gradient_presets.iter().enumerate() {
-                                    if ui.selectable_label(self.preset_index == i + 1, Self::truncate_text(&preset.name, 25)).clicked() {
-                                        to_apply = Some(preset.name.clone());
-                                    }
+                                    ui.horizontal(|ui| {
+                                        if ui.selectable_label(self.preset_index == i + 1, Self::truncate_text(&preset.name, 25)).clicked() {
+                                            to_apply = Some(preset.name.clone());
+                                        }
+                                        let (rect, _) = ui.allocate_at_least(egui::vec2(60.0, 14.0), egui::Sense::hover());
+                                        let n = preset.stops.len();
+                                        for (j, stop) in preset.stops.iter().enumerate() {
+                                            let stop_x = rect.min.x + (stop.pos * rect.width());
+                                            let next_x = if j + 1 < n { rect.min.x + (preset.stops[j+1].pos * rect.width()) } else { rect.max.x };
+                                            ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(stop_x, rect.min.y), egui::pos2(next_x, rect.max.y)), 0.0, stop.color);
+                                        }
+                                    });
                                 }
                                 if let Some(name) = to_apply {
                                     self.apply_gradient_preset(&name, ctx);
@@ -1479,19 +1567,24 @@ impl eframe::App for VibeDitherApp {
                 ui.vertical(|ui| {
                                         ui.label("FORMAT");
                                         ui.horizontal(|ui| { 
-                                            let png_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
-                                            let jpg_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
-                                            let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
-                                            let vid_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Video, "VIDEO");
-                                            
-                                            if self.focus == KeyboardFocus::Export && self.export_row == 0 {
-                                                let r = match self.export_col { 
-                                                    0 => png_btn.rect, 
-                                                    1 => jpg_btn.rect, 
-                                                    2 => webp_btn.rect,
-                                                    _ => vid_btn.rect 
-                                                };
-                                                ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                                            if self.video_stream.is_some() {
+                                                let vid_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Video, "VIDEO");
+                                                if self.focus == KeyboardFocus::Export && self.export_row == 0 {
+                                                    ui.painter().rect_stroke(vid_btn.rect.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                                                }
+                                            } else {
+                                                let png_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Png, "PNG");
+                                                let jpg_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Jpg, "JPG");
+                                                let webp_btn = ui.selectable_value(&mut self.export_settings.format, ExportFormat::Webp, "WEBP");
+                                                
+                                                if self.focus == KeyboardFocus::Export && self.export_row == 0 {
+                                                    let r = match self.export_col { 
+                                                        0 => png_btn.rect, 
+                                                        1 => jpg_btn.rect, 
+                                                        _ => webp_btn.rect,
+                                                    };
+                                                    ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
+                                                }
                                             }
                                         });
                                         ui.separator(); ui.label("SETTINGS");
@@ -1609,8 +1702,8 @@ impl eframe::App for VibeDitherApp {
                     }
                     ui.separator();
                     ui.horizontal(|ui| { 
-                        let c_btn = ui.add(egui::Button::new("Cancel").frame(false)); 
-                        let e_btn = ui.add(egui::Button::new("Export").frame(false)); 
+                        let c_btn = ui.add_enabled(!self.is_exporting, egui::Button::new("Cancel").frame(false)); 
+                        let e_btn = ui.add_enabled(!self.is_exporting, egui::Button::new("Export").frame(false)); 
                         if self.focus == KeyboardFocus::Export && self.export_row == 5 {
                             let r = if self.export_col == 0 { c_btn.rect } else { e_btn.rect };
                             ui.painter().rect_stroke(r.expand(2.0), 0.0, egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 255, 0)));
@@ -1618,13 +1711,19 @@ impl eframe::App for VibeDitherApp {
                         if c_btn.clicked() { close = true; } 
                         if e_btn.clicked() { 
                             if self.export_settings.format == ExportFormat::Video {
-                                self.export_video();
+                                self.export_video(ctx);
                             } else {
                                 self.export_image(); 
+                                close = true; 
                             }
-                            close = true; 
                         } 
                     });
+
+                    if self.is_exporting {
+                        ui.add_space(8.0);
+                        ui.label(format!("Exporting Video: {:.1}%", self.export_progress * 100.0));
+                        ui.add(egui::ProgressBar::new(self.export_progress).show_percentage());
+                    }
                 });
             });
             if close { self.show_export_window = false; self.focus = KeyboardFocus::Main; }

@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
 use image::DynamicImage;
 use std::path::{Path, PathBuf};
-use ffmpeg_sidecar::command::FfmpegCommand;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::io::Read;
 
 pub struct VideoMetadata {
     pub width: u32,
@@ -16,6 +16,11 @@ pub fn get_metadata(path: &Path) -> Result<VideoMetadata> {
     log::info!("video_io: Probing metadata for {:?}", path);
     // Use absolute path for ffprobe
     let mut command = std::process::Command::new(r"C:\ffmpeg\bin\ffprobe.exe");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     command.args([
         "-v", "quiet",
         "-print_format", "json",
@@ -70,31 +75,57 @@ pub fn spawn_video_stream(path: PathBuf, start_time: f32, existing_metadata: Opt
     
     let (tx, rx) = mpsc::sync_channel(20); 
 
+    let meta_clone = VideoMetadata {
+        width: metadata.width,
+        height: metadata.height,
+        fps: metadata.fps,
+        duration: metadata.duration,
+    };
+
     thread::spawn(move || {
-        let mut command = FfmpegCommand::new_with_path(r"C:\ffmpeg\bin\ffmpeg.exe");
-        
-        // Input options (loop and seek) MUST come before .input()
-        command.args(["-stream_loop", "-1"]);
-        if start_time > 0.0 {
-            command.args(["-ss", &start_time.to_string()]);
+        let mut command = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
         }
 
-        command
-            .input(path.to_str().unwrap())
-            .format("rawvideo")
-            .pix_fmt("rgba")
-            .args(["-color_range", "pc", "-"])
-            .print_command();
+        let mut args = vec![
+            "-stream_loop".to_string(), "-1".to_string(),
+        ];
+        if start_time > 0.0 {
+            args.push("-ss".to_string());
+            args.push(start_time.to_string());
+        }
+
+        args.extend([
+            "-i".to_string(), path.to_str().unwrap().to_string(),
+            "-f".to_string(), "rawvideo".to_string(),
+            "-pix_fmt".to_string(), "rgba".to_string(),
+            "-color_range".to_string(), "pc".to_string(),
+            "-".to_string()
+        ]);
+
+        command.args(&args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
 
         if let Ok(mut child) = command.spawn() {
-            if let Ok(iter) = child.iter() {
-                for frame in iter.filter_frames() {
-                    // Send the raw Vec<u8> directly
-                    if tx.send(frame.data).is_err() {
-                        break; 
+            if let Some(mut stdout) = child.stdout.take() {
+                let frame_size = (meta_clone.width * meta_clone.height * 4) as usize;
+                loop {
+                    let mut buffer = vec![0u8; frame_size];
+                    use std::io::Read;
+                    if stdout.read_exact(&mut buffer).is_ok() {
+                        if tx.send(buffer).is_err() {
+                            break; 
+                        }
+                    } else {
+                        break;
                     }
                 }
             }
+            let _ = child.kill();
         }
     });
 
@@ -104,14 +135,25 @@ pub fn spawn_video_stream(path: PathBuf, start_time: f32, existing_metadata: Opt
 pub fn load_first_frame(path: &Path) -> Result<DynamicImage> {
     log::info!("video_io: Loading first frame from {:?}", path);
 
-    let mut command = FfmpegCommand::new_with_path(r"C:\ffmpeg\bin\ffmpeg.exe");
-    command
-        .input(path.to_str().ok_or_else(|| anyhow!("Invalid path"))?)
-        .args(["-f", "image2pipe", "-vcodec", "png", "-frames:v", "1", "-"])
-        .print_command();
+    let mut command = std::process::Command::new(r"C:\ffmpeg\bin\ffmpeg.exe");
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    command.args([
+        "-i", path.to_str().ok_or_else(|| anyhow!("Invalid path"))?,
+        "-f", "image2pipe",
+        "-vcodec", "png",
+        "-frames:v", "1",
+        "-"
+    ])
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::null());
 
     let mut child = command.spawn()?;
-    let mut stdout = child.take_stdout().ok_or_else(|| anyhow!("Failed to capture stdout"))?;
+    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to capture stdout"))?;
     let mut buffer = Vec::new();
     std::io::Read::read_to_end(&mut stdout, &mut buffer)?;
 

@@ -3,8 +3,6 @@
 ## Project Overview
 **VibeDither** is a modern, futuristic, and minimalistic image and video dithering application designed for Windows 11. It features a high-contrast terminal aesthetic and provides high-performance, GPU-accelerated processing tools for artists and designers. 
 
-**Note:** The application currently supports static image processing and initial video frame extraction for dithering. Full video playback and export are planned for v1.2.
-
 ### Main Technologies
 - **Language:** Rust
 - **GPU Graphics/Compute:** `wgpu` (DirectX 12 backend)
@@ -23,29 +21,46 @@
     - Centered "Oscilloscope" style editing overlay for parameter changes.
     - High-fidelity **Per-Channel RGB Curves** editor (Master, R, G, B) with 4x4 background grid.
     - Blender-style Color Ramp for Gradient Remap with immediate GPU color updates.
-    - Real-time live preview with Zoom (selectable list 25%-800%) and Pan (Arrow keys).
+    - Real-time live preview with Zoom (1-4:Zoom) and Pan (Arrow keys / WASD).
 3. **Current Features:**
     - **Adjustments:** Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Temperature, Tint, Vibrance, Saturation, Sharpness.
     - **Dithering:** 
         - Multi-level dither with integrated Posterization.
         - 10 Algorithms: Threshold, Random, Bayer (2x2 to 8x8), Blue Noise, Diffusion Approx, Stucki, Atkinson, Gradient Based, Lattice-Boltzmann.
     - **Gradient Remap:** Multi-stop system with HSB/RGB editing and interpolation.
-    - **Export:** PNG, JPG, WebP with Quality/Compression control, Transparency toggle, and Resolution Scaling (Aspect ratio lock).
+    - **Export:** PNG, JPG, WebP, and MP4/MKV/MOV Video with Quality/Compression control.
     - **I/O:** Drag & drop, Clipboard (Paste), and System File Picker.
 
-## Status: v1.2 Development (Video Support)
+## Status: v1.1 Final (Video & UX Overhaul)
 - [x] Tactical Bit Depth System (1-4 bit range).
 - [x] Discrete Palette Editor with Box UI & Smart Interpolation.
 - [x] Full Keyboard Preset Navigation (Tactical Vertical Lists).
 - [x] Initial Video Support (Load first frame of video) - VERIFIED.
-- [ ] Real-time Video Playback (Preview).
-- [ ] Video Export with Dithering.
-- [x] Official v1.1 Final Release.
-- [x] High-contrast Matrix Green UI with dark-green contrast text on hover.
-- [x] CTRL+O (Open) and CTRL+V (Paste) shortcut support.
-- [x] Comprehensive Dithering suite (10 algorithms).
+- [x] Real-time Video Playback (Preview) - VERIFIED.
+- [x] Video Export with Dithering & Audio - VERIFIED.
+- [x] Hidden FFmpeg Windows (Background processing) - NEW.
+- [x] Video Export Progress Bar & Percentage - NEW.
+- [x] Fixed Video Scaling Bug (2x/4x support) - NEW.
+- [x] Color Accuracy Fixes (BT.709 tagging, VUI, and Range correction).
+- [x] Granular Reset System (Reset Light/Color/Curves independently).
+- [x] Smart Content Loading (Preserve Dither settings across media).
+- [x] Context-Aware Export UI (Shows only relevant formats).
+- [x] Full WASD & Enter support for all UI menus and presets.
+- [x] Refined Global Shortcuts (1-4:Zoom, WASD Navigation).
 
 ## Recent Achievements
+- **Stealth Video Processing:** Hidden all FFmpeg/FFprobe command prompts on Windows using `CREATE_NO_WINDOW` for a seamless "single app" feel.
+- **Video Export Progress Tracking:** Implemented a real-time progress bar and percentage display in the Export window for video rendering.
+- **Fixed Video Scaling:** Resolved a glitch where non-native resolutions (e.g. 2x scale) produced broken video files.
+- **Removed Heavy Dependencies:** Replaced `ffmpeg-sidecar` with native `std::process::Command` to reduce bloat and allow low-level process control.
+- **VibeDither v1.1 Milestone:** Finalized video processing pipeline with stealth execution and improved feedback.
+- **Fixed Video Export Color Accuracy:** Resolved "hallucinated" colors and contrast shifts by explicitly tagging input as full-range RGBA and output as limited-range BT.709. Integrated VUI (Video Usability Information) and `-tune grain` for optimal dither preservation.
+- **Context-Aware Export UI:** Implemented logic to hide/show export formats based on content. Video files now default to Video export, while images show PNG/JPG/WebP.
+- **Granular Reset Logic:** Added dedicated reset buttons for Light and Color sections. These now only reset their specific parameters, preserving Dither and Palette settings.
+- **Smart Media Switching:** Updated the loading pipeline to reset basic adjustments (Light/Color/Curves) but preserve the complex Dither and Palette setup when switching between different images or videos.
+- **Universal WASD & Enter Support:** Standardized keyboard navigation across all menus including Adjust Presets, Palette Presets, Bayer Size, and Export. Added `Enter` as a standard selection key.
+- **Optimized Zoom Workflow:** Redefined number keys `1-4` for faster preview control (Zoom Out, Zoom In, 100%, and Fit to Screen).
+- **Enhanced Palette Preset Previews:** Integrated color bar previews directly into the keyboard-driven Palette Preset menu for immediate visual feedback during selection.
 - **Initial Video Support:** Implemented video frame extraction using `ffmpeg-sidecar`. Users can now load video files (.mp4, .mkv, .mov, etc.), and the application will extract and display the first frame for editing using the existing image pipeline.
 - **Unified "Load Content" Interface:** Renamed the load button and updated file dialogs to support both images and videos seamlessly.
 - **VibeDither v1.1 Final Version:** Reached full stability for image processing with a robust, keyboard-centric workflow.
@@ -71,56 +86,3 @@
 - Fixed Gradient Ramp to trigger immediate GPU updates when stop colors are modified.
 - Cleaned up the shortcut bar and footer for a more professional, distraction-free interface.
 - Streamlined the application by removing broken FFmpeg dependencies and experimental stippling code.
-
-## Video Support Research (v1.2 Planning)
-
-### 1. FFmpeg Reference Links
-- [Rust FFmpeg (ffmpeg-next) Documentation](https://docs.rs/rust_ffmpeg/latest/rust_ffmpeg/index.html)
-- [Official FFmpeg Documentation](https://ffmpeg.org/documentation.html)
-- [FFmpeg Command Line Tool Documentation](https://ffmpeg.org/ffmpeg.html)
-
-### 2. Core Architecture for Video
-To reintegrate video support while maintaining the `wgpu` pipeline, the following components are required:
-- **Decoder (`ffmpeg-next`):** Opens the container (`avformat`), identifies the video stream, and uses the appropriate codec (`avcodec`) to extract raw frames.
-- **Conversion (`libswscale`):** Most videos are in YUV format. These must be converted to `Rgba8UnormSrgb` (matching the current `Pipeline` input) on the CPU before being uploaded to the GPU.
-- **GPU Pipeline Integration:** For each decoded frame, `queue.write_texture` is called to update the `input_texture`. The `Pipeline::render` function then processes the frame using the existing shaders (Adjustments + Dithering).
-- **Encoder (`ffmpeg-next`):** Processed frames are read back from the GPU (`read_back_image` logic) and sent to an encoder to be compressed and saved into a new container.
-
-### 2. Key Components & Libraries
-- **`ffmpeg-next`:** The modern Rust bindings for FFmpeg C libraries. Essential for high-performance, in-memory frame access. Recommended over `rust_ffmpeg` (which is primarily a CLI command builder) to enable seamless GPU integration and live previews.
-    - `ffmpeg::format::input`: For opening video files.
-    - `ffmpeg::decoder::Video`: For decoding packets into frames.
-    - `ffmpeg::software::scaler`: For YUV -> RGBA conversion.
-    - `ffmpeg::encoder::Video`: For compressing processed frames.
-    - `ffmpeg::format::output`: For muxing streams into a file (MP4, MKV, etc.).
-- **`wgpu` Buffers:** Efficient read-back from the GPU is critical for export. Utilizing a buffer pool or persistent mapping can minimize the bottleneck of `copy_texture_to_buffer`.
-
-### 3. Workflow Implementation
-#### A. Importing (Decoding)
-1. Initialize FFmpeg and open the input file.
-2. Locate the best video stream and its decoder parameters.
-3. In the UI loop or a dedicated background thread:
-    - Read the next packet.
-    - Decode packet into a `Frame`.
-    - Scale/Convert `Frame` to RGBA8.
-    - Update `wgpu` texture and trigger a redraw.
-
-#### B. Modifying (Processing)
-- The video frame simply replaces the static `input_texture`.
-- All current UI sliders (Exposure, Contrast, Dither Type, Palette) remain functional and apply to the video frame in real-time.
-- **Playback Sync:** Use `std::time::Instant` and the frame's PTS (Presentation Time Stamp) to match the video's native FPS.
-
-#### C. Exporting (Encoding)
-1. Setup a muxer for the target format.
-2. For every frame in the source video:
-    - Decode and process via `wgpu`.
-    - Read back pixels to CPU.
-    - Encode processed pixels into a new video packet.
-    - Write packet to output file.
-3. **Audio Handling:** Use stream copying (`codec_type == AVMEDIA_TYPE_AUDIO`) to preserve the original audio without re-encoding, if desired.
-
-### 4. Technical Challenges
-- **Read-back Latency:** Reading frames back from the GPU to the CPU is the slowest part of the export.
-- **FFmpeg Dependencies:** Requires shared libraries (`avcodec-60.dll`, etc.) to be present on Windows, which complicates distribution.
-- **Multi-threading:** Decoding and Rendering should ideally happen on separate threads to avoid UI stutters.
-- **Bit Depth / Color Space:** Ensuring gamma correction (sRGB) is handled consistently between FFmpeg and `wgpu`.
