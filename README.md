@@ -1,4 +1,4 @@
-# VibeDither (v1.1)
+# VibeDither (v1.0)
 
 **High-performance, GPU-accelerated image dithering and aesthetic reconstruction.**
 
