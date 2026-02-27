@@ -1,12 +1,12 @@
-# VibeDither (v0.9)
+# VibeDither (v1.1)
 
-**High-performance, GPU-accelerated image dithering and aesthetic reconstruction.**
+**High-performance, GPU-accelerated image and video dithering with a futuristic terminal aesthetic.**
 
 ![VibeDither Example](examples/VibeDither-BlackHole%20Gradient%20Base%20Tone%20Mapin.png)
 
 ## 🧪 The "Vibe Coding" Experiment
 
-This project is a 100% "vibecoded" application. It was built entirely through prompting **Gemini 2.5 and Gemini 3 CLI**. 
+This project is a 100% "vibecoded" application. It was built entirely through prompting **Gemini CLI**. 
 
 **The catch:** I have absolutely zero knowledge of Rust or any other programming language. I only have a "spoonful" of knowledge regarding basic debugging and how to work around technical obstacles. This app is a tool for my personal use and a test to see exactly how far AI vibe coding can be pushed when the "developer" doesn't actually know how to code, only how to prompt and iterate.
 
@@ -15,26 +15,35 @@ This project is a 100% "vibecoded" application. It was built entirely through pr
 | :---: | :---: | :---: |
 | ![Aesthetic](examples/VibeDither-Weird%20Shape%20Aesthetic.jpg) | ![Gradient](examples/VibeDither_GradientBased_Colored.jpg) | ![Stipple](examples/VibeDither_Stippling_Colored%20V2.jpg) |
 
-## ⚠️ Current Status: v0.9 (Work in Progress)
+## 🚀 Status: v1.1 (The Video Update)
 
-The application is currently at version **0.9**. 
-- **The UI is currently broken/unpolished.** I needed to commit this version to Git because it represents a "mostly working" state of the core pipeline.
-- **The Vision:** The final version will feature a much more tactical, high-contrast terminal UI. You can see the design intent in the `UI/` folder.
+The application has reached version **1.1**, marking a major milestone in AI-driven development.
 
-## 🧱 The Walls We Hit
+### Key Features:
+- **Full Video Support:** Load, preview, and export videos (.mp4, .mkv, .mov, etc.) with high-performance dithering and audio preservation.
+- **Stealth FFmpeg Integration:** All video processing happens in the background. No more command prompt windows popping up!
+- **Real-time Progress:** Dedicated progress bar and percentage display for video exports.
+- **Tactical UI:** A monochromatic "Matrix Green" terminal style (RGB 0, 255, 0) built with `egui` and `wgpu`.
+- **Keyboard-Centric Workflow:** Navigate menus, adjust parameters, and apply presets entirely via keyboard (WASD + Enter).
+- **Pro Performance:** Optimized 16-bit floating-point pipeline. Verified to run with **amazing performance even on legacy hardware like the NVIDIA GT 730**.
 
-During development, we ran into two major "walls" where neither I nor the AI could find a way through:
+## 🧱 The Walls We Broke
 
-1.  **Video Support:** I wanted to add video processing, but since I don't understand **FFmpeg** and the AI struggled to bridge that gap without my technical guidance, we ended up running in circles. Video support has been removed to focus on static images.
-2.  **Halftone Effects:** I wanted a proper halftone effect, but neither the AI nor I could conceptually grasp the math/logic required to implement it correctly in the shader, so it was abandoned after several failed attempts.
+Initially, video support was considered a "wall" we couldn't climb. However, through persistent iteration and deep-diving into process management with the AI, we successfully implemented a robust video pipeline using native `std::process::Command` calls to FFmpeg, bypassing the limitations of higher-level libraries.
+
+## 🛠️ Tech Stack
+- **Language:** Rust
+- **Graphics:** `wgpu` (DirectX 12/Vulkan)
+- **UI:** `egui` (Custom Tactical Styling)
+- **Processing:** FFmpeg (Background CLI integration)
 
 ## 🛠️ Performance & Code Quality
 
-If you are an actual programmer, feel free to dive into the code. I honestly don't know if it's high-performance or a total disaster under the hood—that's part of the experiment. If you find something interesting (good or bad) about the code structure produced by the AI, please share your findings! It helps us all understand where "Vibe Coding" stands in 2026.
+If you are an actual programmer, feel free to dive into the code. I honestly don't know if it's high-performance or a total disaster under the hood—that's part of the experiment. However, the fact that it runs smoothly on a **GT 730** suggests the AI did a decent job with the `wgpu` implementation!
 
 ## 🐞 Bugs & Issues
 
-Feel free to submit bugs or issues. I will look into them in my free time, but **please don't expect me to actually fix them.** Since I don't understand what I'm doing in the codebase, I'm just as likely to break it further as I am to fix it!
+Feel free to submit bugs or issues. Since I don't understand what I'm doing in the codebase, I'll be using the same AI "vibes" to try and fix them!
 
 ---
 *Created with Gemini CLI and a lot of vibes.*

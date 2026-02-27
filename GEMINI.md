@@ -52,6 +52,7 @@
 - **Stealth Video Processing:** Hidden all FFmpeg/FFprobe command prompts on Windows using `CREATE_NO_WINDOW` for a seamless "single app" feel.
 - **Video Export Progress Tracking:** Implemented a real-time progress bar and percentage display in the Export window for video rendering.
 - **Fixed Video Scaling:** Resolved a glitch where non-native resolutions (e.g. 2x scale) produced broken video files.
+- **GPU Performance Milestone:** Verified amazing high-performance execution on legacy hardware (NVIDIA GT 730), proving the efficiency of the `wgpu` pipeline.
 - **Removed Heavy Dependencies:** Replaced `ffmpeg-sidecar` with native `std::process::Command` to reduce bloat and allow low-level process control.
 - **VibeDither v1.1 Milestone:** Finalized video processing pipeline with stealth execution and improved feedback.
 - **Fixed Video Export Color Accuracy:** Resolved "hallucinated" colors and contrast shifts by explicitly tagging input as full-range RGBA and output as limited-range BT.709. Integrated VUI (Video Usability Information) and `-tune grain` for optimal dither preservation.
