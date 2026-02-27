@@ -1,4 +1,4 @@
-# VibeDither (v1.0)
+# VibeDither (v1.1)
 
 **High-performance, GPU-accelerated image and video dithering with a futuristic terminal aesthetic.**
 
@@ -15,19 +15,27 @@ This project is a 100% "vibecoded" application. It was built entirely through pr
 | :---: | :---: | :---: |
 | ![Aesthetic](examples/VibeDither-Weird%20Shape%20Aesthetic.jpg) | ![Gradient](examples/VibeDither_GradientBased_Colored.jpg) | ![Stipple](examples/VibeDither_Stippling_Colored%20V2.jpg) |
 
-## ⚠️ Current Status: v1.1 (Work in Progress)
+## 🚀 Status: v1.1 (The Video Update)
 
-The application is currently at version **1.1**. 
-- **No video support yet.** 
-- **Performance not tested** 
+The application has reached version **1.1**, marking a major milestone in AI-driven development.
 
-## 🧱 The Walls We Hit
+### Key Features:
+- **Full Video Support:** Load, preview, and export videos (.mp4, .mkv, .mov, etc.) with high-performance dithering and audio preservation.
+- **Stealth FFmpeg Integration:** All video processing happens in the background. No more command prompt windows popping up!
+- **Real-time Progress:** Dedicated progress bar and percentage display for video exports.
+- **Tactical UI:** A monochromatic "Matrix Green" terminal style (RGB 0, 255, 0) built with `egui` and `wgpu`.
+- **Keyboard-Centric Workflow:** Navigate menus, adjust parameters, and apply presets entirely via keyboard (WASD + Enter).
+- **Pro Performance:** Optimized 16-bit floating-point pipeline. Verified to run with **amazing performance even on legacy hardware like the NVIDIA GT 730**.
 
-During development, we ran into two major "walls" where neither I nor the AI could find a way through:
+## 🧱 The Walls We Broke
 
-1.  **Video Support:** I wanted to add video processing, but since I don't understand **FFmpeg** and the AI struggled to bridge that gap without my technical guidance, we ended up running in circles. Video support has been removed to focus on static images.
-2.  **Halftone Effects:** I wanted a proper halftone effect, but neither the AI nor I could conceptually grasp the math/logic required to implement it correctly in the shader, so it was abandoned after several failed attempts.
-3. **Terminal Interface** While I did find [Ratatui](https://github.com/ratatui/ratatui) I could not find a way to add images to it, so having a preview was unfortunately impossible, but the UI looked exactly like I wanted. But I don't think there is a way to show a live image preview inside a TUI.
+Initially, video support was considered a "wall" we couldn't climb. However, through persistent iteration and deep-diving into process management with the AI, we successfully implemented a robust video pipeline using native `std::process::Command` calls to FFmpeg, bypassing the limitations of higher-level libraries.
+
+## 🛠️ Tech Stack
+- **Language:** Rust
+- **Graphics:** `wgpu` (DirectX 12/Vulkan)
+- **UI:** `egui` (Custom Tactical Styling)
+- **Processing:** FFmpeg (Background CLI integration)
 
 ## 🛠️ Performance & Code Quality
 
