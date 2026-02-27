@@ -2,7 +2,7 @@
 
 **High-performance, GPU-accelerated image and video dithering with a futuristic terminal aesthetic.**
 
-![VibeDither Example](examples/VibeDither-BlackHole%20Gradient%20Base%20Tone%20Mapin.png)
+![VibeDither Example](Promotional%20Material/VibeDither%20IG%203.png)
 
 ## 🧪 The "Vibe Coding" Experiment
 
@@ -13,7 +13,7 @@ This project is a 100% "vibecoded" application. It was built entirely through pr
 ## 🖼️ Gallery
 | Aesthetic Curves | Gradient Based Dither | Stippling (v2) |
 | :---: | :---: | :---: |
-| ![Aesthetic](examples/VibeDither-Weird%20Shape%20Aesthetic.jpg) | ![Gradient](examples/VibeDither_GradientBased_Colored.jpg) | ![Stipple](examples/VibeDither_Stippling_Colored%20V2.jpg) |
+| ![Dithering](examples/VibeDither_GradientBased_Colored2.jpg) | ![Gradient Remap](examples/VibeDither_Random_Colored.jpg) | ![Video Support](examples/VibeDither_Stippling_Colored%20V2.jpg) |
 
 ## 🚀 Status: v1.1 (The Video Update)
 
@@ -44,6 +44,14 @@ If you are an actual programmer, feel free to dive into the code. I honestly don
 ## 🐞 Bugs & Issues
 
 Feel free to submit bugs or issues. Since I don't understand what I'm doing in the codebase, I'll be using the same AI "vibes" to try and fix them!
+
+## 🕳️ Future Ideas
+- Support audio playback inside the app
+- More dithering methods?
+- Stippling
+- Halftone
+- ASCII
+- Keep video support for all methods
 
 ---
 *Created with Gemini CLI and a lot of vibes.*
